@@ -9,7 +9,7 @@
 | 5 | Remaining agents + News Researcher | ✅ done | `python scripts/run_agents.py <T> --agents all` for NVDA, BTC-USD, GC=F → 15/15 valid reports; News Researcher (search + get_news modes) covered by mocks |
 | 6 | Debate + Judge + Monte Carlo + orchestrator | ✅ done | `python orchestrator.py NVDA swing 1M` → P10 134.85 / P50 155.51 / P90 178.89 (11 s, $0.0137); also `BTC-USD scalp 15m`; `pytest tests/test_montecarlo.py tests/test_orchestrator.py` |
 | 7 | Streamlit UI | ✅ done | `python scripts/ui_smoke.py GC=F swing 1M` (real: Predict → every section, 2 charts, no errors); `pytest tests/test_app.py` (AppTest, mocked); `streamlit run app.py` health OK; light/dark/scalp screenshots reviewed (`docs/`) |
-| 8 | Scoreboard + Auto-Scalp | 🟡 running — verify later (see below) | Scoreboard evaluation/metrics/leaderboard + Auto-Scalp tick: `pytest tests/test_orchestrator.py tests/test_autoscalp.py` (mocked). Real: `scripts/auto_scalp.py --runs 4 --interval 300` started 2026-11-19 22:29 local; first run = prediction #4 |
+| 8 | Scoreboard + Auto-Scalp | ✅ done | Real: `scripts/auto_scalp.py --runs 4 --interval 300` (22:29–23:02 local) → **4/4 auto_scalp predictions evaluated** (#4–#7); final metrics over all 5 evaluated scalp predictions: hit rate 60% vs 50% coin flip, P10–P90 coverage 40%, MAPE 0.45%; leaderboard Macro 60%, Psychology 60%, Technical 40% (n=5). Mocked: `test_orchestrator.py`, `test_autoscalp.py` |
 | 9 | README + screenshots + demo rehearsal | ✅ done (live rehearsal is yours) | `README.md`, `docs/*.png`; demo steps 2–5 exercised via CLI / AppTest (NVDA swing, GC=F swing, debate, trace) |
 
 Full suite: `pytest -q` → **85 passed** (network tests included).
@@ -35,7 +35,7 @@ Full suite: `pytest -q` → **85 passed** (network tests included).
 
 Before the demo, switch `ANALYST_MODEL` / `JUDGE_MODEL` (and optionally `SCALP_MODEL`) in `.env` to `gemini-3.8-flash`. Its price is already in `config.PRICES`.
 
-## Checkpoint 8: how to verify later
+## Checkpoint 8: how it was verified (re-check anytime)
 
 The headless Auto-Scalp started at 22:29 local (15:29 UTC), with 4 BTC-USD 15m predictions 5 min apart (#4 and the next three). It then keeps evaluating until about 23:02 local and prints final metrics. Done = **≥ 3 evaluated `auto_scalp` predictions**.
 
@@ -106,6 +106,8 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 - **Git**: repo-local identity set to the account email; `.env`, `data/*.db` and `logs/` are git-ignored. `.env` has never been committed.
 
 ## Known issues
+
+- **Scalp bands may be too narrow**: only 2 of 5 evaluated BTC 15m predictions landed inside P10–P90 (#4 and #5 closed below P10 during a sell-off). A well-calibrated band covers ~80%. n=5 is far too small to conclude anything, but if it persists, σ from the last 5 days of 1m bars underestimates 15-minute moves (volatility clustering / fat tails). Options: a longer lookback, or σ from 15m returns scaled to the horizon. Watch the Scoreboard as more data comes in.
 
 - **Intermittent invalid JSON from flash-lite** (seen once in the polish run, prediction #9): the Technical and Psychology agents' final text failed to parse, and the old context-free repair call produced generic filler ("Positive momentum observed"). Recovery now fixes the JSON inside the conversation first (see the polish table). The failing text wasn't captured, so the root cause is unknown. It's logged now, so watch the console for `output not valid JSON` warnings. Prediction #9 stays in the DB as it was.
 
