@@ -65,6 +65,29 @@ class Verdict(BaseModel):
     key_risks: list[str] = Field(description="2-4 key risks")
 
 
+# --- strict variants for local models (LOCAL_LLM.md lessons 1-2) -------------------------------
+# LM Studio's json_schema enforces structure but ignores minimum/maximum (scores came back as 72.5), so the
+# openai_compat provider validates with these and retries with feedback. Descriptions repeat the rule in the
+# schema the model sees.
+DECIMAL_SCORE = "decimal from -1.0 to 1.0, e.g. 0.35 or -0.2, NOT a percentage"
+DECIMAL_CONF = "decimal from 0.0 to 1.0, e.g. 0.7, NOT a percentage"
+
+
+class AgentOutputStrict(AgentOutput):
+    score: float = Field(ge=-1.0, le=1.0, description=DECIMAL_SCORE)
+    confidence: float = Field(ge=0.0, le=1.0, description=DECIMAL_CONF)
+    key_points: list[str] = Field(min_length=1, max_length=6,
+                                  description="3-5 short bullet points citing numbers from tools")
+
+
+class VerdictStrict(Verdict):
+    adjustment: float = Field(ge=-1.0, le=1.0, description="decimal from -0.2 to 0.2, e.g. 0.05, NOT a percentage")
+    final_confidence: float = Field(ge=0.0, le=1.0, description=DECIMAL_CONF)
+
+
+STRICT_SCHEMAS: dict[type, type] = {AgentOutput: AgentOutputStrict, Verdict: VerdictStrict}
+
+
 class Forecast(BaseModel):
     price_now: float
     p10: float

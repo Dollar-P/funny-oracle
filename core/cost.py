@@ -65,6 +65,11 @@ def price_for(model: str, on: date | None = None) -> dict:
     return entries[-1]
 
 
+def is_free(model: str) -> bool:
+    p = price_for(model)
+    return p["in"] == 0 and p["out"] == 0 and p["search"] == 0
+
+
 def cost_usd(u: Usage, on: date | None = None) -> float:
     p = price_for(u.model, on)
     return (
@@ -209,6 +214,8 @@ class BudgetGuard:
         if row and row[1]:
             return max(float(row[0]) * 1.25, 0.001)
         base = config.DEFAULT_ESTIMATE_USD.get(mode, 0.2)
+        if model and is_free(model):
+            return 0.0
         if model:
             p, ref = price_for(model), price_for(config.REFERENCE_PRICE_MODEL)
             base *= max(1.0, (p["in"] + p["out"]) / (ref["in"] + ref["out"]))
@@ -218,6 +225,8 @@ class BudgetGuard:
         return self.budget_usd - spent_usd()
 
     def check_prediction(self, mode: str, model: str | None = None) -> float:
+        if model and is_free(model):  # local models cost nothing, so they also work when the budget is out
+            return 0.0
         spent = spent_usd()
         est = self.estimate_usd(mode, model)
         if spent + est > self.budget_usd:
