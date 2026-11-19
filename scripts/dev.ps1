@@ -12,5 +12,6 @@ try {
   npm run dev
 } finally {
   Pop-Location
-  if ($api -and -not $api.HasExited) { Stop-Process -Id $api.Id -Force }
+  # kill the whole tree: stopping only the reloader would orphan its uvicorn worker (still holding :8000)
+  if ($api -and -not $api.HasExited) { taskkill /T /F /PID $api.Id | Out-Null }
 }

@@ -4,6 +4,7 @@
 
 | # | Checkpoint | Status | Verified by |
 |---|---|---|---|
+| R8 | Real-run verification + polish | ✅ done | **5 real runs** (the cap), all through the production build (`npm run build` + one `uvicorn api.main:app`, `MOCK_LLM=false`), driven in headless Chrome: #13 NVDA, #14 BTC-USD, #15 GC=F swing 1M on gemini-3.5-flash-lite (`e2e/show.mjs`, 54–56 events each, all 6 stages, real search bubbles, 0 console errors), then one duel NVDA swing 1M flash-lite (#17) vs gemini-3.8-flash (#16) (`e2e/duel.mjs`, both lanes in parallel, 39 s, "🤝 Both bullish"). Every agent present in all 5. Reduced motion (`show.mjs --reduced`): no drumroll, no typewriter caret, no confetti; normal motion shows all three. Phone width 390 px: no horizontal scroll on Arena / Replay / Duel / Hall of Fame (`e2e/mobile.mjs`). `scripts\dev.ps1` started both servers (mock) and the proxy answered. Screenshots in `docs/` (real runs where possible); README updated. Full suite `pytest tests api/tests` → **155 passed**; `orchestrator.py` CLI and `streamlit run app.py` (health ok) unchanged |
 | R7 | Duel + Hall of Fame + Auto-Scalp card + Share card | ✅ done | `node web/e2e/r7.mjs` (headless Chrome, mock API, real DB): **Hall of Fame** shows real metrics (AI 67% vs coin 50%, n = 6 → "maybe luck"), band coverage gauge with 80% marker + MAPE, agent podium, model leaderboard (2 models), 6 pending with live countdowns, 12-row history with ticker/mode/model filters (scalp → 6) and replay links, Auto-Scalp card (disabled in mock mode with reason); **share card** from `/p/10` and `/p/11` downloads a 1080×1350 PNG (~400 KB) with wordmark, ticker, headline, Bear/Base/Bull + P(up), mini fan, 5 agent chips, model, timestamp and the disclaimer; **mock duel** GOLD swing 1M (3.5 Flash-Lite vs 3.8 Flash) streams both lanes in parallel and ends in the head-to-head ("🤝 Both bearish", P50/P(up)/conf/S_final/cost/time rows, agent bar pairs). 0 console errors |
 | R6 | Verdict reveal + forecast chart + prize cards + countdown + Replay page | ✅ done (committed together with R5) | `node web/e2e/show.mjs … NVDA swing 1M` → drumroll → verdict card (headline, S_final meter, confidence, key risks) → fan chart (candles + P10–P90 band + P50, TradingView attribution) → Bear/Base/Bull + P(up) cards → countdown, Replay/Run again/Duel buttons, cost/model footer; `… BTC-USD scalp 15m` → no news/debate stages, countdown card flips to ✅/❌ (mock shows the original prediction's result, labelled); `node web/e2e/replay.mjs … 10` → `/p/10` renders verdict, 5 podiums, 3 debate turns, chart + prize cards; "▶ Replay the show" streams it live and ends in the verdict. 0 console errors. API: `GET /api/predictions/{id}?evaluate=1` (+ test) |
 | R5 | Live war room: podiums, bubbles, ticker tape, progress rail, tug-of-war, debate typewriter, agent drawer | ✅ done | `node web/e2e/show.mjs` (mock NVDA swing, replay of #10): all 54 events received (13 types), podium states thinking / "on the phone" (spinning ring) / done with score chip, tool bubbles ✓, search bubbles, live provisional S on the rope, 6/6 rail steps, 3 debate turns typed out in order (click to skip), 31 tape lines (= 54 − 7 stage − 5 cost − 11 results merged into their call lines), drawer opens with score meter, key points, reasoning, tool trace, sources |
@@ -11,6 +12,37 @@
 | R3 | Web scaffold: Vite + TS + Tailwind + tokens + TopBar + routing | ✅ done | `cd web; npm run build` (tsc + vite, 0 errors); `scripts\dev.ps1` equivalents running (uvicorn :8000 mock + vite :5173), headless Chrome screenshot of `/` shows stage background, TopBar (wordmark, nav, live budget ฿14/฿100 + MOCK badge, sound toggle, disclaimer pill), no console errors |
 | R2 | FastAPI: RunManager, SSE, MockRunner, all REST routes | ✅ done | `pytest api/tests` (22 passed: every route, full mock show validated against `api/events.py`, SSE `id`/`event` lines, `Last-Event-ID` + `?after=` replay, 404/422/429/402, real run through a mocked orchestrator, mock + real duels, replay endpoint, model leaderboard incl. duel wins, Auto-Scalp start/stop/mock block); live: `MOCK_LLM=true uvicorn api.main:app` → `curl -N /api/runs/<id>/events` streamed a complete 54-event show (replay of #10 NVDA) |
 | R1 | Event hook + per-run model override | ✅ done | `pytest tests/test_events.py` (15: full swing event order, scalp stages, agent_failed error/timeout, news_brief, search events, no-callback path, broken callback, budget refusal → fatal `error`, model override used per role + stored, per-role .env fallback, cross-provider rejected, per-model estimate); full suite 132 passed; `orchestrator.py` CLI unchanged |
+
+### Redesign summary (R1–R8, 2026-11-19 → 11-20)
+
+**What exists now:** `api/` (FastAPI: RunManager + SSE + MockRunner + REST, 23 tests) on top of the unchanged
+pipeline (only additions: `on_event` hook, per-run `analyst_model`/`judge_model`/`run_id`/`duel_id`, additive DB
+columns), and `web/` (React 19 + Vite 8 + Tailwind 4): Arena (setup → live war room → verdict reveal → fan chart),
+Duel, Hall of Fame, Replay `/p/:id`, share card PNG. The Streamlit app and CLI still work.
+
+**Real runs used: 5 of 5**, ฿7.29 tracked (≈ ฿3.6 estimated actual with the free search tier).
+
+| # | What | Model | Tracked | Est. actual | Time |
+|---|---|---|---|---|---|
+| #13 | NVDA swing 1M (UI) | 3.5 Flash-Lite | ฿0.64 | ฿0.64 | 26 s |
+| #14 | BTC-USD swing 1M (UI) | 3.5 Flash-Lite | ฿1.42 | ฿0.50 | 25 s |
+| #15 | GC=F swing 1M (UI) | 3.5 Flash-Lite | ฿1.57 | ฿0.64 | 49 s |
+| #16 | Duel B: NVDA swing 1M | 3.8 Flash | ฿3.04 | ฿1.19 | 36 s |
+| #17 | Duel A: NVDA swing 1M | 3.5 Flash-Lite | ฿0.61 | ฿0.61 | 37 s |
+
+**Total spend now:** ฿21.65 tracked / ฿11.49 estimated actual of ฿100.
+
+**Bugs found by looking at screenshots / e2e (all fixed):** drawer and modals clipped by a `backdrop-filter`
+ancestor (→ portals); duel head-to-head never appeared (callback saw pre-event state); share card overflowed and
+cut off the disclaimer (→ pinned footer, clamped headline); html-to-image couldn't embed Google Fonts
+(→ `crossorigin`); the verdict lost its slam-in/confetti after the drumroll (reveal flag recomputed each render);
+Replay page timer counted from creation time; Duel setup overflowed at 390 px; mock fan didn't start at the live
+candle for same-ticker replays; legacy predictions showed no model (→ filled from the backfilled columns).
+
+**Check manually:** click through in a real browser with sound on (I only drove headless Chrome, which has no
+audio); copy-to-clipboard on the share card (headless can't verify the clipboard); a real **scalp** run in the
+Arena (only mock scalp shows were verified in the UI; real scalp runs were verified earlier via CLI/Auto-Scalp);
+Auto-Scalp start/stop from the Hall of Fame in real mode (API-tested with a fake `tick`, not run for real).
 
 ### Redesign decisions
 
@@ -164,6 +196,10 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 - **Git**: repo-local identity set to the account email; `.env`, `data/*.db` and `logs/` are git-ignored. `.env` has never been committed.
 
 ## Known issues
+
+- **flash-lite JSON in the R8 real runs**: the server log shows `output not valid JSON` warnings (Business, Technical, and once the Bull opening, whose reply was the JSON object *backslash-escaped as a string*: `{\\"argument\\": …`). The in-conversation fix-up recovered every case (all agents present in all 5 runs), at the price of one extra call each. A cheap improvement would be to un-escape `\\"` in `extract_json` before giving up. Not done: agent/LLM code was out of scope for the redesign.
+- **`test_lmstudio.py`** (untracked, not mine) sits at the repo root, so a bare `pytest` collects it and it may call a LAN LM Studio host. Run `pytest tests api/tests`, or move it.
+- **Mock shows** rescale prices to today's price, but the agents' key points and debate text still quote the original numbers.
 
 - **`.env` was not switched to gemini-3.8-flash**: all three model lines still read `gemini-3.5-flash-lite` (3.8-flash appears only in a comment), so the app and CLI still run flash-lite. The demo seeds were run with `ANALYST_MODEL`/`JUDGE_MODEL`/`SCALP_MODEL` set as environment variables (python-dotenv doesn't override existing variables). Save `.env` before the demo.
 

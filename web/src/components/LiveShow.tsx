@@ -27,6 +27,7 @@ function Elapsed({ s }: { s: ShowState }) {
     return () => clearInterval(t);
   }, [running]);
   if (!s.meta) return null;
+  if (!running && s.prediction && !s.meta.mock && s.doneTs === null) return <span className="num">{s.prediction.elapsed_s.toFixed(0)}s</span>;
   const end = s.doneTs ?? (running ? now : s.tape[s.tape.length - 1]?.ts ?? now);
   return <span className="num">{Math.max(0, (end - s.meta.startedTs) / 1000).toFixed(0)}s</span>;
 }

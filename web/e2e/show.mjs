@@ -6,7 +6,7 @@ const [base = "http://localhost:5173", outDir = ".", ticker = "NVDA", mode = "sw
 const reduced = process.argv.includes("--reduced");
 const tag = `${ticker.replace(/[^A-Z]/gi, "")}_${mode}${reduced ? "_reduced" : ""}`;
 const browser = await chromium.launch({ channel: "chrome", headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 1100 }, reducedMotion: reduced ? "reduce" : "no-preference" });
+const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 1440, height: 1100 }, reducedMotion: reduced ? "reduce" : "no-preference" });
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -27,18 +27,21 @@ await page.addInitScript(() => {
 });
 
 await page.goto(base + "/", { waitUntil: "networkidle" });
-await page.evaluate(([t, m, h]) => sessionStorage.setItem("oracle.arena", JSON.stringify({ ticker: t, mode: m, horizon: h, runId: null })), [ticker, mode, horizon]);
+await page.evaluate(([t, m, h, mdl]) => sessionStorage.setItem("oracle.arena", JSON.stringify({ ticker: t, mode: m, horizon: h, runId: null, analystModel: mdl, judgeModel: null })), [ticker, mode, horizon, process.env.MODEL ?? null]);
 await page.reload({ waitUntil: "networkidle" });
 await page.getByRole("button", { name: /START THE SHOW/ }).click();
 
-const seen = { thinking: false, phone: false, bubbleOk: false, bubbleSearch: false, scoreChip: false, provisional: false };
+const seen = { drumroll: false, caret: false, confetti: false, thinking: false, phone: false, bubbleOk: false, bubbleSearch: false, scoreChip: false, provisional: false };
 const t0 = Date.now();
 let shotMid = false;
 let shotDebate = false;
-while (Date.now() - t0 < 150_000) {
+while (Date.now() - t0 < 300_000) {
   const st = await page.evaluate(() => {
     const txt = document.body.innerText;
     return {
+      drumroll: txt.includes("THE ORACLE HAS DECIDED"),
+      caret: !!document.querySelector(".typing-caret"),
+      confetti: [...document.body.children].some((e) => e.tagName === "CANVAS"),
       thinking: txt.includes("thinking…"),
       phone: txt.includes("on the phone…"),
       bubbleOk: [...document.querySelectorAll("[title]")].some((e) => /get_\w+\(/.test(e.getAttribute("title") ?? "") && e.textContent.includes("✓")),
@@ -61,9 +64,16 @@ while (Date.now() - t0 < 150_000) {
     shotDebate = true;
   }
   if (st.done && (st.revealed || st.verdict)) break;
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(100);
 }
-await page.waitForTimeout(reduced ? 500 : 3500); // let the reveal + fan chart finish
+// keep sampling effects for a bit after the verdict mounts (confetti fires on mount)
+for (let i = 0; i < 25; i++) {
+  seen.confetti ||= await page.evaluate(() => [...document.body.children].some((e) => e.tagName === "CANVAS"));
+  await page.waitForTimeout(100);
+}
+const sFinal = await page.evaluate(() => (window.__events.find((e) => e.type === "judge") ?? {}).s_final);
+log(`s_final ${sFinal}`);
+await page.waitForTimeout(reduced ? 300 : 1500); // let the fan chart finish
 const events = await page.evaluate(() => window.__events);
 const types = [...new Set(events.map((e) => e.type))];
 const tape = await page.locator("[aria-label^='Ticker tape'] div.num > div").count();

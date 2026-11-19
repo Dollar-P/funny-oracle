@@ -114,7 +114,7 @@ export default function Duel() {
           />
           <div className="grid md:grid-cols-2 gap-4">
             {(["A", "B"] as const).map((side) => (
-              <div key={side}>
+              <div key={side} className="min-w-0">
                 <h2 className="font-display text-xl mb-2" style={{ color: side === "A" ? "#38bdf8" : "#a78bfa" }}>
                   {side === "A" ? "🔵" : "🟣"} Model {side}
                 </h2>

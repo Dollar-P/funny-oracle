@@ -29,13 +29,19 @@ function Rain() {
 }
 
 export function useReveal(runKey: string | null, enabled: boolean) {
-  const skip = !enabled || !runKey || revealed.has(runKey) || prefersReducedMotion();
+  // decided once per run key: re-renders after the run is marked "revealed" must keep animating
+  const decide = () => !enabled || !runKey || revealed.has(runKey) || prefersReducedMotion();
+  const [state, setState] = useState(() => ({ key: runKey, skip: decide() }));
+  const current = state.key === runKey ? state : { key: runKey, skip: decide() };
+  if (current !== state) setState(current);
+  const skip = current.skip;
   const [phase, setPhase] = useState<"drumroll" | "shown">(skip ? "shown" : "drumroll");
   useEffect(() => {
     if (skip) {
       setPhase("shown");
       return;
     }
+    setPhase("drumroll");
     revealed.add(runKey!);
     sfx.drumroll(1.2);
     const t = setTimeout(() => setPhase("shown"), 1200);
