@@ -1,7 +1,7 @@
 # Progress
 
 Status as of 2026-11-20. Default model: **gemini-3.5-flash-lite** for every role (pick others per run in the
-Arena / Duel). Full suite: `pytest -q` → **176 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
+Arena / Duel). Full suite: `pytest -q` → **214 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
 tests included).
 
 ## Status
@@ -44,13 +44,33 @@ tests included).
 | R7 | Duel, Hall of Fame, Auto-Scalp card, share card | ✅ | `web/e2e/r7.mjs`: Hall of Fame on the real DB, 1080×1350 share PNG, mock duel → head-to-head |
 | R8 | Real-run verification + polish | ✅ | 5 real runs through the production build in headless Chrome (table below), every agent present; reduced motion (no drumroll / typewriter / confetti) vs normal (all three); 390 px with no horizontal scroll (`web/e2e/mobile.mjs`); `scripts\dev.ps1` brings up both servers; screenshots in `docs/`. CLI and Streamlit unchanged |
 
-## Local LLM (branch `local-llm`, in progress — not merged)
+## Local LLM (branch `local-llm`, ready for review — not merged)
 
-Spec: `LOCAL_LLM.md`. Done and unit-tested (mocked server): step 2 `openai_compat` provider in `core/llm.py`
-(lessons 1-8, 10); step 3 `web_search` / `fetch_url` MCP tools (lesson 9); step 4 pipeline wiring (News
-Researcher `web` mode, LOCAL_MAX_TURNS / LOCAL_TIMEOUT_S, queue-aware agent timeouts, Quick/Deep preset,
-scalp refusal). **Not done yet:** step 5 API + Arena/Duel model picker for local models; step 6 real runs
-against LM Studio (1 swing Quick + 1 duel local vs gemini-3.5-flash-lite); step 7 final docs.
+Spec: `LOCAL_LLM.md` (LM Studio findings, 10 lessons). Model ids are `local:<LM Studio id>`; the server comes only
+from `LOCAL_BASE_URL` (env / local `.env`, default `http://localhost:1234/v1`) — no host is hard-coded anywhere.
+
+| Step | What | Verified by |
+|---|---|---|
+| 1 | `LOCAL_LLM.md` added as the spec (LAN address redacted) | – |
+| 2 | `openai_compat` provider (`core/llm.py`, `OpenAICompatBackend`) | `tests/test_local_llm.py` (16, scripted fake server): tool turns with `reasoning_effort: "none"` + 1,000 max_tokens; final turn without tools, `response_format: json_schema` (strict schema with "decimal, NOT a percentage" descriptions); Deep thinks only on final turns (4,000 max_tokens); range validation + retry with the invalid JSON and a problem list; truncated thinking retried; `reasoning_content` / leaked `<think>` split off; price 0 with tokens logged; budget guard never blocks a free model; HTTP errors fail the agent gracefully; process-wide `LOCAL_CONCURRENCY` across threads; repeated identical tool calls end the tool phase |
+| 3 | MCP tools `web_search` (Bing News RSS → Google News RSS → DuckDuckGo) and `fetch_url` (trafilatura, ≤ 1,500 chars) | `tests/test_web_tools.py` (16, network mocked): fallback order, ≤ 2 KB with `as_of`, 45-min cache, Bing link decoding, DDG parsing, text cap, private/loopback/link-local/IPv6-loopback refused incl. via redirect, non-http schemes refused; live smoke test against the real web |
+| 4 | Pipeline: News Researcher `web` mode (searches once, brief shared with Business/Macro/Psychology), `LOCAL_MAX_TURNS`, `LOCAL_TIMEOUT_S`, agents queue for the GPU (timeout starts when an agent runs), Quick/Deep preset stored on the prediction, Scalp refused before any call | `tests/test_local_llm.py` |
+| 5 | API + UI: `/api/models` lists LM Studio's chat models (free, `scalp_ok: false`, unavailable with a reason when the server is down), `think_preset` on predictions and duels, budget guard skips free models; Arena/Duel pickers with a "free · local" badge, Quick/Deep toggle, Scalp refusal on the card and the Start button | `api/tests` (6 new); `web/e2e/local_picker.mjs` (screenshots `docs/local_llm/picker_*.png`) |
+| 6 | **Real runs** (LM Studio, `prism-ml/bonsai-27b`, RTX 4050 6 GB), production build driven in headless Chrome | see below |
+
+**Real verification (2026-11-20, 04:18–04:32 local)**
+
+| # | What | Model | Time | Cost | Result |
+|---|---|---|---|---|---|
+| – | smoke test: Technical agent alone, NVDA | bonsai-27b Quick | 79 s | ฿0 | valid report quoting the signal labels; showed the repeated-tool-call issue (fixed in `bc30833`) |
+| #18 | Arena NVDA swing 1M | bonsai-27b **Quick** | **6.6 min** (397 s) | ฿0 | 81 events, all 5 agents present, News Researcher used `web_search` + `fetch_url` (3-link brief), 3 debate turns, verdict "Bulls bet on the P/E gap, but bears have the tape and the volume.", S_final +0.15, 0 validation retries |
+| #20 / #19 | Duel NVDA swing 1M | bonsai-27b Quick vs gemini-3.5-flash-lite | 352 s vs 12 s | ฿0 vs ฿0.52 | "⚔️ They disagree!" — P(up) 48% vs 52%, confidence 0.35 vs 0.55; every agent present on both sides |
+
+Screenshots: `docs/local_llm/arena_local_quick_real.png`, `docs/local_llm/duel_local_vs_flash_lite_real.png`.
+Spend after: ฿22.17 tracked (only the Flash-Lite side cost money).
+
+**Not verified for real:** the **Deep** preset (estimated 20–30 min; unit-tested only), a local-vs-local duel,
+and the hybrid "Gemini as News Researcher" option from the doc (not implemented).
 
 ## GitHub readiness (2026-11-20, not pushed)
 

@@ -91,5 +91,9 @@ Caveat: prompts tuned on Bonsai may behave differently on Gemini — keep result
 - `openai/gpt-oss-20b` — larger than 6 GB VRAM, would spill to RAM (slower than Bonsai).
 - Ternary Bonsai 27B (~5.9 GB) — no room left for context.
 
-## Next step
-Implement `openai_compat` provider (+ `web_search` / `fetch_url` MCP tools) after the redesign reaches a checkpoint, or on a separate branch, so it doesn't collide with the R-series work.
+## Implemented (branch `local-llm`)
+`openai_compat` provider + `web_search` / `fetch_url` MCP tools, following lessons 1–10; details and tests in
+`PROGRESS.md` → Local LLM. Measured end-to-end with bonsai-27b, **Quick** preset: a swing show took **6.6 min**
+(397 s) in the Arena and 352 s as one side of a duel — faster than the 8–10 min estimate above. Deep is still an
+estimate. One new finding: in tool turns with thinking off, the model tends to repeat identical tool calls until
+the turn limit; the provider now ends the tool phase when a turn only repeats earlier calls.

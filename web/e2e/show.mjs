@@ -27,7 +27,7 @@ await page.addInitScript(() => {
 });
 
 await page.goto(base + "/", { waitUntil: "networkidle" });
-await page.evaluate(([t, m, h, mdl]) => sessionStorage.setItem("oracle.arena", JSON.stringify({ ticker: t, mode: m, horizon: h, runId: null, analystModel: mdl, judgeModel: null })), [ticker, mode, horizon, process.env.MODEL ?? null]);
+await page.evaluate(([t, m, h, mdl, think]) => sessionStorage.setItem("oracle.arena", JSON.stringify({ ticker: t, mode: m, horizon: h, runId: null, analystModel: mdl, judgeModel: null, thinkPreset: think })), [ticker, mode, horizon, process.env.MODEL ?? null, process.env.THINK ?? "quick"]);
 await page.reload({ waitUntil: "networkidle" });
 await page.getByRole("button", { name: /START THE SHOW/ }).click();
 
@@ -35,7 +35,7 @@ const seen = { drumroll: false, caret: false, confetti: false, thinking: false, 
 const t0 = Date.now();
 let shotMid = false;
 let shotDebate = false;
-while (Date.now() - t0 < 300_000) {
+while (Date.now() - t0 < Number(process.env.SHOW_TIMEOUT_MS ?? 300_000)) {
   const st = await page.evaluate(() => {
     const txt = document.body.innerText;
     return {
