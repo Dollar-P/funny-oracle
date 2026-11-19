@@ -168,6 +168,18 @@ def test_prediction_history_and_detail(client, api_db):
     assert client.get("/api/predictions/999999").status_code == 404
 
 
+def test_prediction_evaluate_on_demand(client, api_db, monkeypatch):
+    from core.db import connect
+
+    pid = api_db["ids"][1]
+    with connect() as conn:
+        conn.execute("UPDATE predictions SET target_time = '2020-01-01T00:00:00+00:00', actual_price = NULL WHERE id = ?",
+                     (pid,))
+    monkeypatch.setattr("core.scoreboard.actual_price", lambda *a, **k: 123.0)
+    assert client.get(f"/api/predictions/{pid}").json()["actual_price"] is None
+    assert client.get(f"/api/predictions/{pid}?evaluate=1").json()["actual_price"] == 123.0
+
+
 def test_replay_endpoint(client, api_db):
     pid = api_db["ids"][1]  # BTC scalp
     rid = client.post(f"/api/predictions/{pid}/replay").json()["run_id"]

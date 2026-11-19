@@ -1,6 +1,7 @@
 """Predictions, SSE run events, duels and replays."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -94,9 +95,8 @@ def _start_mock(ticker: str, mode: str, horizon: str, models: dict | None, *, pi
     stored = mock_runner.load(pid)
     if stored is None:
         raise HTTPException(404, f"prediction {pid} not found")
-    live = None
-    if relabel and normalize(ticker) != stored.ticker:
-        live = _live_price(ticker)
+    # rescale to today's price so the fan starts at the last live candle (even for the same ticker)
+    live = _live_price(ticker) if relabel else None
     p = mock_runner.adapt(stored, ticker if relabel else None, mode, horizon, live)
     if models:
         p.models = models  # the mock show pretends to run on the models the user picked
@@ -200,10 +200,19 @@ async def list_predictions(limit: int = Query(50, le=500), ticker: str | None = 
 
 
 @router.get("/predictions/{pid}")
-async def get_prediction(pid: int):
+async def get_prediction(pid: int, evaluate: bool = False):
+    """evaluate=1: if the target time has passed and there is no actual price yet, try to fetch it now."""
     p = scoreboard.load(pid)
     if p is None:
         raise HTTPException(404, f"prediction {pid} not found")
+    if evaluate:
+        with connect() as conn:
+            row = conn.execute("SELECT actual_price, target_time FROM predictions WHERE id = ?", (pid,)).fetchone()
+        if row["actual_price"] is None and row["target_time"] <= scoreboard.utcnow().isoformat():
+            try:
+                await asyncio.wait_for(asyncio.to_thread(scoreboard.evaluate_due, 20), 20)
+            except Exception:  # network trouble: the client simply retries later
+                pass
     with connect() as conn:
         row = conn.execute("SELECT actual_price, evaluated_at, source FROM predictions WHERE id = ?", (pid,)).fetchone()
     return {"prediction": json.loads(p.model_dump_json()), "actual_price": row["actual_price"],

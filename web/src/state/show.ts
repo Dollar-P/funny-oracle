@@ -127,6 +127,11 @@ export const initialShow = (runId: string | null = null): ShowState => ({
 
 const TAPE_MAX = 200;
 
+export function quoteOnce(q: string): string {
+  const t = q.trim();
+  return /^["“]/.test(t) ? t : `"${t}"`;
+}
+
 function agentOf(s: ShowState, id: string): AgentState {
   return (
     s.agents[id] ?? {
@@ -219,12 +224,13 @@ export function reduce(s: ShowState, ev: RunEvent): ShowState {
       return { ...s, tape: t };
     }
     case "search": {
+      const q = quoteOnce(ev.query);
       s = withAgent(s, ev.agent, (a) => ({
         ...a,
-        bubble: { kind: "search", text: `"${ev.query}"`, ok: true },
+        bubble: { kind: "search", text: q, ok: true },
         trace: [...a.trace, { kind: "search", tool: "search", text: ev.query, ok: true, ts: ev.ts }],
       }));
-      return tape(s, ev, ev.agent, "🔎", `"${ev.query}"`, true);
+      return tape(s, ev, ev.agent, "🔎", q, true);
     }
     case "news_brief":
       s = { ...s, news: { bullets: ev.bullets, links: ev.links } };

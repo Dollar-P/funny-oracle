@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { thb } from "../lib/format";
 
 export interface Refusal {
@@ -17,7 +18,7 @@ export default function OutOfCoins({ refusal, onClose }: { refusal: Refusal | nu
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
   }, [refusal, onClose]);
-  return (
+  return createPortal(
     <AnimatePresence>
       {refusal && (
         <motion.div
@@ -57,6 +58,7 @@ export default function OutOfCoins({ refusal, onClose }: { refusal: Refusal | nu
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

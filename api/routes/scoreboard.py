@@ -111,6 +111,7 @@ def budget_snapshot() -> dict:
     month = cost.searches_this_month()
     return {
         "budget_thb": g.budget_thb,
+        "usd_thb": config.USD_THB,
         "spent_thb": round(cost.usd_to_thb(tracked), 2),
         "estimated_actual_thb": round(cost.usd_to_thb(actual), 2),
         "remaining_thb": round(cost.usd_to_thb(g.remaining_usd()), 2),

@@ -64,8 +64,8 @@ def adapt(p: Prediction, ticker: str | None, mode: str | None, horizon: str | No
         t = normalize(ticker)
         if t != p.ticker:
             p.ticker, p.asset_type = t, classify(t)
-        if live_price and p.forecast.price_now > 0:
-            _scale_prices(p, live_price / p.forecast.price_now)
+    if live_price and p.forecast.price_now > 0:
+        _scale_prices(p, live_price / p.forecast.price_now)
     if mode and horizon and mode == p.mode and horizon in config.HORIZONS[mode]:
         p.horizon = horizon
     now = datetime.now(timezone.utc)

@@ -187,6 +187,7 @@ export interface Candle {
 
 export interface Budget {
   budget_thb: number;
+  usd_thb: number;
   spent_thb: number;
   estimated_actual_thb: number;
   remaining_thb: number;

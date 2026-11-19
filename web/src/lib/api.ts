@@ -74,9 +74,9 @@ export const api = {
     Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && q.set(k, String(v)));
     return req<{ predictions: PredictionRow[] }>(`/predictions?${q}`);
   },
-  prediction: (id: number) =>
+  prediction: (id: number, evaluate = false) =>
     req<{ prediction: Prediction; actual_price: number | null; evaluated_at: string | null; source: string }>(
-      `/predictions/${id}`,
+      `/predictions/${id}${evaluate ? "?evaluate=1" : ""}`,
     ),
   run: (id: string) => req<{ run_id: string; done: boolean; prediction_id: number | null; error: string | null }>(`/runs/${id}`),
   startDuel: (b: { ticker: string; mode: Mode; horizon: string; model_a: string; model_b: string; mock?: boolean }) =>
