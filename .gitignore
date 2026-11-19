@@ -6,3 +6,6 @@ data/*.db
 .pytest_cache/
 *.log
 logs/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
