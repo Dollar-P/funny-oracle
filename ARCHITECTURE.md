@@ -2,6 +2,8 @@
 
 > A multi-agent (Agentic AI) system that predicts asset prices (US stocks / Crypto / Gold) for education and fun.
 > **Not investment advice.**
+>
+> *Implementation status and every departure from this document are logged in `PROGRESS.md`.*
 
 ---
 
@@ -100,16 +102,16 @@ User: BTC-USD, mode=swing, horizon=1M
 
 ### 4.1 MCP Server — `mcp_server/server.py`
 
-Built with the MCP Python SDK (`FastMCP`), stdio transport. Shared by the in-app agents and by Claude Code during development (`claude mcp add market-data -- python mcp_server/server.py`).
+Built with the MCP Python SDK **2.x** (`mcp.server.mcpserver.MCPServer` — the 2.x name for v1's `FastMCP`), stdio transport. Shared by the in-app agents (via `core/mcp_client.py`, which uses the 2.x `mcp.Client` + `StdioServerParameters`) and by Claude Code during development (`claude mcp add market-data -- <venv python> mcp_server/server.py`). stdout carries JSON-RPC only: the server logs to stderr, and mcp 2.x additionally diverts fd 1 while serving so stray library `print()`s cannot corrupt the stream.
 
 | Tool | Input | Output (JSON) | Source |
 |---|---|---|---|
 | `get_price_history` | ticker, interval (`1m`…`1d`), period | last N bars + summary (last, %chg, high/low) | yfinance |
 | `get_indicators` | ticker, interval | RSI14, MACD, SMA20/50/200, EMA, Bollinger, ATR, volume z-score, support/resistance | computed from OHLCV |
 | `get_fundamentals` | ticker | P/E, Fwd P/E, PEG, EV/EBITDA, margins, revenue growth, FCF, debt/equity, analyst target | yfinance `.info` |
-| `get_macro` | – | FEDFUNDS, CPI YoY, DGS10, DFII10 (real yield), T10Y2Y, DXY, ^VIX | FRED + yfinance |
+| `get_macro` | – | FEDFUNDS, CPI YoY, DGS10, DFII10 (real yield), T10Y2Y, DXY, ^VIX | FRED API if `FRED_API_KEY` is set, otherwise FRED's public `fredgraph.csv` endpoint (no key) + yfinance |
 | `get_news` | ticker, limit | headline, publisher, date, link | yfinance `.news` |
-| `get_sentiment` | asset_type | VIX, Crypto Fear & Greed, distance from 52w high, momentum proxy | yfinance + alternative.me |
+| `get_sentiment` | asset_type, ticker (optional; defaults to SPY / BTC-USD / GC=F) | VIX, Crypto Fear & Greed, distance from 52w high/low, 1M/3M momentum, vs SMA50, RSI | yfinance + alternative.me |
 | `get_onchain_lite` | coin | market cap, volume/mcap, dominance, ATH distance | CoinGecko free API |
 
 **Rules:**
@@ -139,10 +141,12 @@ class LLM:
 - Keep thinking/reasoning effort low for analysts (cheaper, faster); allow a higher setting for the Judge only.
 - Convert MCP tool schemas → Gemini `FunctionDeclaration`s and run the loop manually: model requests a function call → call MCP → return result → repeat until the model emits the final JSON.
 - `enable_search=True` → enable Google Search grounding; collect `grounding_metadata` as sources.
-- **Caveat:** if the chosen model doesn't support Search + function calling in the same request, use the `NewsResearcher` (4.4) instead.
-- Enforce JSON output with `response_schema` (Pydantic); retry once on parse failure.
+- Gemini only accepts Search + function calling together with `tool_config.include_server_side_tool_invocations=True`; search calls then arrive as `tool_call` parts (`GOOGLE_SEARCH_WEB`), which are counted for cost.
+- **Capability probe:** each model is probed once (tiny request, cached 7 days) for `search+functions` and `search`. Fallback chain: grounded analysts → `NewsResearcher` with Search only (4.4) → `NewsResearcher` over the `get_news` MCP tool (also used when `ENABLE_SEARCH=false`).
+- JSON output: the tool loop asks for JSON in the prompt and parses the final text; on parse failure one extra call uses JSON mode + `response_json_schema` (retry once). Second failure → agent absent.
+- At `max_turns` the model is told to answer and function calling is set to `NONE`.
 - Record every tool call in `trace` (tool name, args, latency, result size) for the UI.
-- Switch provider via `.env` (`LLM_PROVIDER=gemini|claude`).
+- Switch provider via `.env` (`LLM_PROVIDER=gemini|claude`). The Claude backend uses the `anthropic` SDK (manual loop, server `web_search` tool, `output_config.effort`), with model IDs from `CLAUDE_*_MODEL`.
 
 ### 4.3 Analyst Agents — `agents/`
 
@@ -241,14 +245,17 @@ Why λ = 0.5: even a fully confident team can only move the median by half a sig
 **SQLite schema**
 ```sql
 predictions(
-  id INTEGER PK, created_at, ticker, asset_type, mode, horizon, target_time,
+  id INTEGER PK, run_id UNIQUE, created_at, ticker, asset_type, mode, horizon, target_time,
   price_now, p10, p50, p90, prob_up, s_raw, s_final, confidence, headline,
+  cost_usd, source,               -- manual | cli | auto_scalp
+  prediction_json,                -- full Prediction, for replay in the UI (?replay=<id>)
   actual_price NULL, evaluated_at NULL
 )
-agent_outputs(prediction_id FK, agent, score, confidence, reasoning, trace_json)
+agent_outputs(prediction_id FK, agent, score, confidence, reasoning, trace_json, error)
 cache(key PK, value_json, expires_at)
-llm_usage(id PK, prediction_id FK NULL, created_at, agent, model,
+llm_usage(id PK, prediction_id FK NULL, run_id, created_at, agent, model,
           input_tokens, output_tokens, thinking_tokens, search_calls, cost_usd)
+-- run_id links usage rows written during a run; prediction_id is filled on save
 ```
 
 **Evaluation** (runs whenever the Scoreboard tab opens: find predictions past `target_time`, fetch actual prices)
@@ -304,7 +311,11 @@ funny-oracle/
 │   ├── llm.py                 # Gemini/Claude wrapper + agent loop
 │   ├── mcp_client.py          # MCP stdio client, schema conversion
 │   ├── schemas.py             # Pydantic: AgentReport, Verdict, Prediction
-│   ├── scoreboard.py          # SQLite + evaluation
+│   ├── scoreboard.py          # persistence + evaluation + metrics
+│   ├── db.py                  # SQLite connection + schema
+│   ├── cache.py               # TTL cache (table `cache`)
+│   ├── cost.py                # price lookup, llm_usage, BudgetGuard
+│   ├── autoscalp.py           # Auto-Scalp tick (UI fragment + headless script)
 │   └── asset.py               # classify ticker → stock/crypto/gold
 ├── agents/
 │   ├── base.py
@@ -317,17 +328,26 @@ funny-oracle/
 ├── knowledge/                 # (extension point, empty in v1) books / notes for RAG
 ├── theses/                    # (extension point, empty in v1) user theses
 ├── mcp_server/
-│   ├── server.py              # FastMCP tools
+│   ├── server.py              # MCPServer tools (mcp 2.x)
 │   ├── data_sources.py        # yfinance, FRED, alternative.me, CoinGecko
 │   └── indicators.py
 ├── quant/
 │   └── montecarlo.py
+├── scripts/
+│   ├── run_agents.py          # run analysts only (checkpoints 4–5)
+│   ├── ui_smoke.py            # real Predict click via Streamlit AppTest
+│   └── auto_scalp.py          # headless Auto-Scalp loop
 ├── tests/
 │   ├── test_mcp_tools.py      # fetch NVDA, BTC-USD, GC=F for real
+│   ├── test_mcp_client.py     # stdio server via mcp 2.x client
+│   ├── test_llm.py            # agent loop / cost / budget (mocked Gemini)
+│   ├── test_orchestrator.py   # full pipeline + scoreboard (mocked)
+│   ├── test_app.py            # Streamlit AppTest (mocked)
+│   ├── test_autoscalp.py
 │   └── test_montecarlo.py
 ├── data/oracle.db
 ├── .env.example               # GEMINI_API_KEY, FRED_API_KEY, LLM_PROVIDER, ANTHROPIC_API_KEY (optional)
-├── requirements.txt           # streamlit yfinance pandas numpy plotly mcp google-genai pydantic httpx python-dotenv
+├── requirements.txt           # streamlit yfinance pandas numpy plotly mcp>=2.3,<3 google-genai pydantic httpx python-dotenv pytest (+ anthropic, optional)
 ├── ARCHITECTURE.md            # this file
 └── README.md
 ```
@@ -344,7 +364,7 @@ funny-oracle/
 | **Hallucination** | Prompts require citing numbers from tools only; Judge also sees the trace |
 | **Stale data** | Every tool returns `as_of`; agents must flag data older than the horizon |
 | **Secrets** | API keys in `.env` (git-ignored) |
-| **Windows** | Use `asyncio.WindowsSelectorEventLoopPolicy` if MCP stdio subprocess issues appear |
+| **Windows** | No event-loop workaround needed: mcp 2.x stdio works on Windows / Python 3.14 out of the box (the loop-policy API is deprecated in 3.14 anyway) |
 
 ---
 
