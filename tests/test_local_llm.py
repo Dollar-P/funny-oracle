@@ -227,3 +227,15 @@ def test_local_swing_uses_news_web_mode():
     import orchestrator
 
     assert anyio.run(lambda: orchestrator._search_mode(LLM("local", client=FakeLocal([])), MODEL, "swing")) == "news_web"
+
+
+def test_repeated_identical_tool_calls_end_the_tool_phase(fresh_db):
+    """Seen live: bonsai repeated get_price_history + get_indicators 4x until the turn limit."""
+    same = [call("get_price_history", {"ticker": "NVDA"}, "a"), call("get_indicators", {"ticker": "NVDA"}, "b")]
+    fake = FakeLocal([msg(tool_calls=same), msg(tool_calls=same), msg(json.dumps(GOOD))])
+    res = run_agent(fake, tools=("get_price_history", "get_indicators"))
+    assert [t.tool for t in res.trace] == ["get_price_history", "get_indicators"]   # executed once
+    assert len(fake.requests) == 3 and "tools" not in fake.requests[2]             # 2nd turn → straight to final
+    final_msgs = fake.requests[2]["messages"]
+    # the repeated assistant tool_calls turn was dropped (no dangling tool_calls without results)
+    assert sum(1 for m in final_msgs if m.get("tool_calls")) == 1 and res.output.score == 0.35

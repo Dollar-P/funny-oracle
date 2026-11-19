@@ -753,6 +753,7 @@ class OpenAICompatBackend:
         trace: list[ToolCall] = []
         reasoning_parts: list[str] = []
         candidate = ""
+        seen_calls: set[str] = set()
 
         # 1) tool-selection turns: thinking off (simple decisions, ~3 s each)
         if tools:
@@ -774,6 +775,14 @@ class OpenAICompatBackend:
                     except json.JSONDecodeError:
                         args = {}
                     parsed.append((c, fn.get("name", ""), args if isinstance(args, dict) else {}))
+                keys = [n + json.dumps(a, sort_keys=True, default=str) for _, n, a in parsed]
+                if all(k in seen_calls for k in keys):
+                    # small local models tend to repeat the same calls until the turn limit; the results are
+                    # already in context, so go straight to the final answer
+                    messages.pop()
+                    log.info("local agent %s: repeated tool calls, ending the tool phase", agent)
+                    break
+                seen_calls.update(keys)
                 results = await asyncio.gather(*(GeminiBackend._exec(executor, n, a, allowed) for _, n, a in parsed))
                 for (c, name, _a), (data, tc) in zip(parsed, results):
                     trace.append(tc)
