@@ -1,6 +1,8 @@
 """Agent loop + cost tracking + budget guard, with a scripted fake Gemini (no API calls)."""
 from __future__ import annotations
 
+import json
+
 import anyio
 import pytest
 from google.genai import errors
@@ -242,3 +244,45 @@ def test_server_side_search_parts_are_counted(fresh_db):
     assert rep.ok
     assert rep.trace[0].tool == "google_search" and rep.trace[0].args["queries"] == ["fed decision", "fomc 2026"]
     assert cost.run_cost("ss") == pytest.approx(100 * 0.3 / 1e6 + 50 * 2.5 / 1e6 + 2 * 0.014)
+
+
+# --- tolerant JSON extraction (no repair call needed) -------------------------
+
+OBJ = {"score": 0.4, "confidence": 0.7, "key_points": ["a {b}", "c"], "reasoning": "r", "sources": []}
+OBJ_JSON = json.dumps(OBJ)
+
+
+@pytest.mark.parametrize("text", [
+    OBJ_JSON,                                                             # plain
+    f"```json\n{OBJ_JSON}\n```",                                          # json fence
+    f"```JSON\n{OBJ_JSON}\n```",                                          # upper-case fence
+    f"```\n{OBJ_JSON}\n```",                                              # bare fence
+    f"Here is my analysis:\n```json\n{OBJ_JSON}\n```\nHope this helps!",  # prose around a fence
+    f"Here is the JSON: {OBJ_JSON}",                                      # leading prose
+    f"{OBJ_JSON}\n\nNote: RSI {{14}} was used.",                          # trailing prose with braces
+    f"Scores {{approx}}: {OBJ_JSON} -- end",                              # prose with a non-JSON brace first
+    f"```json\n{OBJ_JSON}",                                               # unterminated fence (truncated)
+    f"﻿  {OBJ_JSON}  ",                                              # BOM / whitespace
+    f"```json\nSure! {OBJ_JSON} done\n```",                               # prose inside the fence
+])
+def test_extract_json_tolerant(text):
+    assert extract_json(text) == OBJ
+
+
+def test_extract_json_nested_and_first_object():
+    nested = {"a": {"b": [1, {"c": "}"}]}, "d": "x"}
+    assert extract_json("prefix " + json.dumps(nested) + " suffix") == nested
+    assert extract_json('{"first": 1} and {"second": 2}') == {"first": 1}
+
+
+@pytest.mark.parametrize("text", ["", "no json here", "[1, 2, 3]", '{"unterminated": ', "{not json}"])
+def test_extract_json_rejects(text):
+    with pytest.raises(ValueError):
+        extract_json(text)
+
+
+def test_tolerant_parse_avoids_any_repair_call(fresh_db):
+    wrapped = "Analysis complete.\n```json\n" + AGENT_JSON + "\n```\nLet me know if you need more."
+    fake = FakeGemini([text_response(wrapped)])
+    rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
+    assert rep.ok and len(fake.requests) == 1

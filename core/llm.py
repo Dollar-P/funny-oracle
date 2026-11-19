@@ -62,22 +62,48 @@ class AgentResult:
 
 # --- JSON helpers ----------------------------------------------------------------
 
-_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
+_FENCE = re.compile(r"```[ \t]*(?:json)?[ \t]*\n?(.*?)```", re.S | re.I)
+
+
+_DECODER = json.JSONDecoder()
+
+
+def _first_object(text: str) -> dict | None:
+    """The first complete top-level {...} object in `text`, ignoring prose before and after it.
+
+    Uses raw_decode from each '{' so braces inside strings, nested objects and trailing prose
+    (even prose containing more braces) are handled correctly.
+    """
+    i = text.find("{")
+    while i != -1:
+        try:
+            obj, _end = _DECODER.raw_decode(text, i)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        i = text.find("{", i + 1)
+    return None
 
 
 def extract_json(text: str) -> Any:
-    """Parse JSON from model text: plain, fenced, or the outermost {...} span."""
-    text = (text or "").strip()
-    candidates = [text]
-    candidates += [m.strip() for m in _FENCE.findall(text)]
-    i, j = text.find("{"), text.rfind("}")
-    if i != -1 and j > i:
-        candidates.append(text[i : j + 1])
-    for c in candidates:
+    """Tolerant JSON extraction from model text, tried in order:
+
+    1. the whole text as-is
+    2. the contents of ```json / ``` fences (any case)
+    3. the first complete outermost {...} object, ignoring leading/trailing prose
+    """
+    text = (text or "").strip().lstrip("\ufeff").strip()
+    for candidate in [text, *(b.strip() for b in _FENCE.findall(text))]:
         try:
-            return json.loads(c)
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):  # agent outputs are always objects
+                return obj
         except (json.JSONDecodeError, ValueError):
-            continue
+            pass
+        obj = _first_object(candidate)
+        if obj is not None:
+            return obj
     raise ValueError("no JSON object found in model output")
 
 

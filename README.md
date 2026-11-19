@@ -42,7 +42,7 @@ charged a deliberately pessimistic price.
 .venv\Scripts\python scripts\auto_scalp.py --runs 4 --interval 900   # headless Auto-Scalp
 ```
 
-- **Swing:** horizons 1W / 1M / 3M on daily data. 5 analysts + debate + judge (~9 LLM calls, ~10–15 s, about ฿0.5–1.5 with flash-lite).
+- **Swing:** horizons 1W / 1M / 3M on daily data. 5 analysts + 3-turn debate + judge (~14 LLM calls). About 10–15 s and ฿0.5–1.5 with flash-lite; about 40 s and ฿2–4 with gemini-3.8-flash (tracked cost, which charges every Google Search query; the free search tier usually makes the real bill lower).
 - **Scalp:** horizons 15m / 1h / 4h on 1m / 5m / 15m bars. Technical + Macro-lite + Psychology + Judge (~4 calls).
   US stocks only move during market hours, so use BTC-USD for a scalp demo.
 - **Replay:** the sidebar can reload any stored prediction (no API cost), or open `http://localhost:8501/?replay=<id>`.
