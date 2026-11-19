@@ -100,6 +100,8 @@ with st.sidebar:
     spent = cost.total_spent_usd()
     used = cost.usd_to_thb(spent)
     st.progress(min(1.0, used / config.BUDGET_THB), text=f"Budget used: ฿{used:.2f} / ฿{config.BUDGET_THB:.0f}")
+    st.caption(f"Tracked ฿{used:.2f} (searches at list price) · est. actual ฿{cost.usd_to_thb(cost.total_actual_usd()):.2f}"
+               f" (first {config.GEMINI_SEARCH_FREE_PER_MONTH:,} searches/month free)")
     try:
         est = BudgetGuard().estimate_usd(mode)
         st.caption(f"Next {mode} prediction ≈ ฿{cost.usd_to_thb(est):.2f} (estimate)")

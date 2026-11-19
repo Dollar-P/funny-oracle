@@ -27,7 +27,7 @@ from core.llm import LLM, ToolExecutor
 from core.mcp_client import MarketDataClient
 from core.schemas import AgentReport, Prediction
 from mcp_server import data_sources as ds
-from quant.montecarlo import sigma_per_bar, simulate, weighted_score
+from quant.montecarlo import sigma_horizon_per_step, sigma_per_bar, simulate, weighted_score
 
 log = logging.getLogger("orchestrator")
 
@@ -68,6 +68,23 @@ async def _search_mode(llm: LLM, model: str, mode: str) -> str:
     return "news_tool"
 
 
+async def _scalp_sigma(ticker: str, horizon: str, minutes: int, steps: int, fallback: float,
+                       fallback_source: str) -> tuple[float, str]:
+    """σ per step from horizon-scale returns over a longer lookback (config.SCALP_SIGMA)."""
+    spec = config.SCALP_SIGMA.get(horizon)
+    if not spec:
+        return fallback, fallback_source
+    try:
+        df = await asyncio.to_thread(ds.fetch_ohlcv, ticker, spec["interval"], spec["period"])
+        s = sigma_horizon_per_step(df["Close"], minutes, steps)
+    except Exception as e:  # data hiccup → keep the per-bar estimate
+        log.warning("horizon σ for %s %s failed: %s", ticker, horizon, e)
+        s = None
+    if s is None:
+        return fallback, fallback_source + " (horizon-scale fallback)"
+    return s, f"{horizon} returns from {spec['interval']} bars over {spec['period']}"
+
+
 async def _with_timeout(coro, agent: str, timeout: float) -> AgentReport:
     try:
         return await asyncio.wait_for(coro, timeout)
@@ -106,6 +123,11 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
     px = await asyncio.to_thread(ds.fetch_ohlcv, ticker, hz["interval"], lookback if mode == "scalp" else "1y")
     sigma = sigma_per_bar(px["Close"])
     price_now = float(px["Close"].iloc[-1])
+    sigma_source = f"per-bar {hz['interval']} over {lookback if mode == 'scalp' else '1y'}"
+    steps = hz["steps"][asset] if isinstance(hz["steps"], dict) else hz["steps"]
+    if mode == "scalp":
+        sigma, sigma_source = await _scalp_sigma(ticker, horizon, hz["minutes"], steps, sigma, sigma_source)
+    say(f"σ per step {sigma:.5f} ({sigma_source})")
 
     ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"])
 
@@ -156,7 +178,6 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
     else:
         confidence = 0.0
 
-    steps = hz["steps"][asset] if isinstance(hz["steps"], dict) else hz["steps"]       # [7]
     forecast = simulate(price_now, sigma, steps, s_final, step_label=hz["interval"], seed=seed)
     say(f"Monte Carlo: P10 {forecast.p10:,.2f} | P50 {forecast.p50:,.2f} | P90 {forecast.p90:,.2f}")
 
@@ -166,18 +187,20 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
         horizon=horizon, target_time=(now + timedelta(minutes=hz["minutes"])).isoformat(timespec="seconds"),
         s_raw=s_raw, s_final=s_final, confidence=confidence, weights=weights, reports=reports, news=ctx.news,
         debate=debate, verdict=verdict, forecast=forecast, cost_usd=cost.run_cost(run_id),
+        cost_actual_usd=cost.run_cost_actual(run_id),
         elapsed_s=round(time.perf_counter() - t0, 1), search_mode=search_mode,
     )
     if save:                                                                            # [8]
         scoreboard.save(pred, run_id, source)
-        say(f"Saved prediction #{pred.id} (cost ${pred.cost_usd:.4f})")
+        say(f"Saved prediction #{pred.id} (cost tracked ${pred.cost_usd:.4f}, est. actual ${pred.cost_actual_usd or 0:.4f})")
     return pred
 
 
 def format_prediction(p: Prediction) -> str:
     f = p.forecast
     lines = [
-        f"🔮 {p.ticker} · {p.mode} · {p.horizon}   (#{p.id}, {p.elapsed_s:.0f}s, ${p.cost_usd:.4f} ≈ ฿{cost.usd_to_thb(p.cost_usd):.2f})",
+        f"🔮 {p.ticker} · {p.mode} · {p.horizon}   (#{p.id}, {p.elapsed_s:.0f}s, tracked ${p.cost_usd:.4f} ≈ ฿{cost.usd_to_thb(p.cost_usd):.2f}"
+        + (f", est. actual ฿{cost.usd_to_thb(p.cost_actual_usd):.2f})" if p.cost_actual_usd is not None else ")"),
         f"   {p.verdict.headline if p.verdict else '(no verdict)'}",
         f"   Now {f.price_now:,.2f}",
         f"   Bear P10 {f.p10:,.2f} | Base P50 {f.p50:,.2f} | Bull P90 {f.p90:,.2f} | P(up) {f.prob_up:.0%} | conf {p.confidence:.2f}",

@@ -43,7 +43,7 @@ ENABLE_SEARCH = _bool("ENABLE_SEARCH", True)
 ANALYST_THINKING = _env("ANALYST_THINKING", "low")   # Gemini thinking_level / Claude effort
 JUDGE_THINKING = _env("JUDGE_THINKING", "medium")
 MAX_CONCURRENCY = int(_env("LLM_MAX_CONCURRENCY", "5"))
-AGENT_TIMEOUT_S = float(_env("AGENT_TIMEOUT_S", "45"))
+AGENT_TIMEOUT_S = float(_env("AGENT_TIMEOUT_S", "60"))
 MAX_AGENT_TURNS = 8
 
 
@@ -65,6 +65,10 @@ def models_for(mode: str, provider: str | None = None) -> dict[str, str]:
 # Search grounding: 5,000 free req/month shared across Gemini 3+, then $14/1k.
 # We always charge $0.014/search so the budget guard stays conservative.
 GEMINI_SEARCH_USD = 14 / 1000
+# Estimated-actual cost treats the first N Gemini search queries of each calendar month (UTC)
+# as free. The budget guard uses the tracked (list-price) figure unless BUDGET_BASIS=actual.
+GEMINI_SEARCH_FREE_PER_MONTH = int(_env("GEMINI_SEARCH_FREE_PER_MONTH", "5000"))
+BUDGET_BASIS = _env("BUDGET_BASIS", "tracked").lower()   # tracked | actual
 CLAUDE_SEARCH_USD = 10 / 1000
 
 PRICES: dict[str, list[dict]] = {
@@ -150,6 +154,16 @@ HORIZONS = {
     },
 }
 SIGMA_LOOKBACK = {"swing": "1y", "scalp": "5d"}
+# Scalp σ: horizon-scale log returns (one return = the whole horizon) over a longer lookback,
+# then σ_step = σ_horizon / √steps. Bar data must exist that far back in yfinance
+# (15m ≤ 60 days, 1h ≤ 730 days). Falls back to per-bar σ of the scalp interval when too few
+# horizon returns are available.
+SCALP_SIGMA = {
+    "15m": {"interval": "15m", "period": "60d"},
+    "1h": {"interval": "1h", "period": "6mo"},
+    "4h": {"interval": "1h", "period": "1y"},
+}
+MIN_HORIZON_RETURNS = 30
 
 LAMBDA = 0.5          # |S|=1 shifts the median by 0.5σ over the horizon
 MC_PATHS = 10_000

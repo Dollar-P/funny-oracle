@@ -65,3 +65,58 @@ def test_weighted_score_renormalizes():
     assert weighted_score({"a": (1.0, 0.2), "b": (-1.0, 0.8)}, w) == pytest.approx(-0.6)
     assert weighted_score({"c": (1.0, 1.0)}, w) == 0.0            # zero weight only
     assert weighted_score({}, w) == 0.0
+
+
+# --- horizon-scale σ (scalp) ------------------------------------------------------
+
+from quant.montecarlo import horizon_returns, sigma_horizon_per_step  # noqa: E402
+
+
+def _bars(n, freq_min, sigma_bar, seed=0, start="2026-09-01"):
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range(start, periods=n, freq=f"{freq_min}min", tz="UTC")
+    return pd.Series(100 * np.exp(np.cumsum(rng.normal(0, sigma_bar, n))), index=idx)
+
+
+def test_horizon_returns_span_exactly_the_horizon():
+    c = _bars(100, 15, 0.002)
+    r = horizon_returns(c, 15)
+    assert len(r) == 99
+    assert r.iloc[0] == pytest.approx(math.log(c.iloc[1] / c.iloc[0]))
+    r4h = horizon_returns(_bars(100, 60, 0.004), 240)
+    assert len(r4h) == 96
+
+
+def test_horizon_returns_skip_gaps():
+    c = _bars(40, 15, 0.002)
+    gapped = pd.concat([c.iloc[:20], c.iloc[20:].shift(1, freq="16h")])  # overnight gap
+    r = horizon_returns(gapped, 15)
+    assert len(r) == 38  # the return across the gap is excluded
+
+
+def test_sigma_horizon_per_step_matches_random_walk():
+    # 1h horizon on 1h bars with σ_bar 0.004 → σ_h ≈ 0.004; 12 sim steps → per step 0.004/√12
+    c = _bars(3000, 60, 0.004, seed=3)
+    s = sigma_horizon_per_step(c, 60, 12)
+    assert s == pytest.approx(0.004 / math.sqrt(12), rel=0.05)
+    # 4h horizon from 1h bars: σ_h ≈ 0.004·√4
+    s4 = sigma_horizon_per_step(c, 240, 16)
+    assert s4 == pytest.approx(0.004 * 2 / 4, rel=0.08)
+
+
+def test_sigma_horizon_captures_fat_horizon_moves_better_than_per_bar():
+    # trending/clustered horizon moves: per-bar σ × √steps underestimates when bars autocorrelate
+    rng = np.random.default_rng(5)
+    n = 2000
+    shocks = np.repeat(rng.normal(0, 0.003, n // 4), 4)  # 4 identical 15m moves per hour → momentum
+    idx = pd.date_range("2026-09-01", periods=n, freq="15min", tz="UTC")
+    c = pd.Series(100 * np.exp(np.cumsum(shocks)), index=idx)
+    per_bar = sigma_per_bar(c)
+    s = sigma_horizon_per_step(c, 60, 4)
+    assert s > per_bar * 1.3
+
+
+def test_sigma_horizon_returns_none_when_insufficient():
+    assert sigma_horizon_per_step(_bars(10, 15, 0.002), 15, 15) is None
+    daily = _bars(260, 24 * 60, 0.02)
+    assert sigma_horizon_per_step(daily, 15, 15) is None  # no 15-minute pairs in daily data

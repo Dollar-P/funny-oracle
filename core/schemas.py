@@ -94,6 +94,7 @@ class Prediction(BaseModel):
     debate: list[DebateArgument] = Field(default_factory=list)
     verdict: Verdict | None = None
     forecast: Forecast
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0          # tracked (searches at list price)
+    cost_actual_usd: float | None = None  # estimated actual (free monthly search tier applied)
     elapsed_s: float = 0.0
     search_mode: str = "off"  # grounded | news_fallback | off

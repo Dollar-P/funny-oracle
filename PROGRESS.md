@@ -12,7 +12,16 @@
 | 8 | Scoreboard + Auto-Scalp | ✅ done | Real: `scripts/auto_scalp.py --runs 4 --interval 300` (22:29–23:02 local) → **4/4 auto_scalp predictions evaluated** (#4–#7); final metrics over all 5 evaluated scalp predictions: hit rate 60% vs 50% coin flip, P10–P90 coverage 40%, MAPE 0.45%; leaderboard Macro 60%, Psychology 60%, Technical 40% (n=5). Mocked: `test_orchestrator.py`, `test_autoscalp.py` |
 | 9 | README + screenshots + demo rehearsal | ✅ done (live rehearsal is yours) | `README.md`, `docs/*.png`; demo steps 2–5 exercised via CLI / AppTest (NVDA swing, GC=F swing, debate, trace) |
 
-Full suite: `pytest -q` → **103 passed** (network tests included).
+Full suite: `pytest -q` → **117 passed** (network tests included, after the quick fixes below).
+
+## Quick fixes (2026-11-19, before the redesign)
+
+| Change | Verified by |
+|---|---|
+| `AGENT_TIMEOUT_S` default **45 → 60 s** (config + `.env.example`). | `tests/test_cost.py::test_agent_timeout_default_is_60` |
+| **Scalp σ from horizon-scale returns** over a longer lookback: 15m horizon → 15m returns from 15m bars over 60 days; 1h → 1h returns from 1h bars over 6 months; 4h → 4h returns from 1h bars over 1 year (`config.SCALP_SIGMA`). Returns are overlapping but only counted when the bar exactly one horizon earlier exists, so overnight/weekend gaps don't inflate σ. σ per sim step = σ_horizon / √steps, so the fan chart still has per-minute/per-bar steps. Falls back to the old per-bar σ if fewer than 30 horizon returns exist or the fetch fails. Swing is unchanged. | `test_montecarlo.py` (exact-span, gap skipping, random-walk recovery, momentum case where per-bar σ underestimates, insufficient data) and `test_orchestrator.py` (scalp uses `15m/60d` data; fallback) |
+| **Search free tier in the cost tracker**: two figures everywhere. *Tracked* = every search at list price ($0.014), what `llm_usage.cost_usd` stores. *Estimated actual* = first `GEMINI_SEARCH_FREE_PER_MONTH` (5,000) Gemini search queries per UTC month are free, allocated chronologically and shared across Gemini models; Claude searches are never free. `Prediction.cost_actual_usd` (new, optional), CLI output, Streamlit sidebar caption, and `cost.spend_summary()` (`tracked_*`, `estimated_actual_*`, searches this month, free left). The budget guard stays on **tracked** (conservative) unless `BUDGET_BASIS=actual`. | `tests/test_cost.py` (within tier, per-month chronological allocation, Claude, summary, budget basis); all mocked |
+
 
 ## gemini-3.8-flash demo seeds (2026-11-19 ~23:10 local)
 
@@ -127,7 +136,7 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 
 - **`.env` was not switched to gemini-3.8-flash**: all three model lines still read `gemini-3.5-flash-lite` (3.8-flash appears only in a comment), so the app and CLI still run flash-lite. The demo seeds were run with `ANALYST_MODEL`/`JUDGE_MODEL`/`SCALP_MODEL` set as environment variables (python-dotenv doesn't override existing variables). Save `.env` before the demo.
 
-- **Scalp bands may be too narrow**: only 2 of 5 evaluated BTC 15m predictions landed inside P10–P90 (#4 and #5 closed below P10 during a sell-off). A well-calibrated band covers ~80%. n=5 is far too small to conclude anything, but if it persists, σ from the last 5 days of 1m bars underestimates 15-minute moves (volatility clustering / fat tails). Options: a longer lookback, or σ from 15m returns scaled to the horizon. Watch the Scoreboard as more data comes in.
+- **Scalp bands may be too narrow** (addressed by the horizon-scale σ quick fix; re-check coverage once new scalp predictions are evaluated): only 2 of 5 evaluated BTC 15m predictions landed inside P10–P90 (#4 and #5 closed below P10 during a sell-off). A well-calibrated band covers ~80%. n=5 is far too small to conclude anything, but if it persists, σ from the last 5 days of 1m bars underestimates 15-minute moves (volatility clustering / fat tails). Options: a longer lookback, or σ from 15m returns scaled to the horizon. Watch the Scoreboard as more data comes in.
 
 - **Intermittent invalid JSON from flash-lite** (seen once in the polish run, prediction #9; none in the 3 gemini-3.8-flash seeds): the Technical and Psychology agents' final text failed to parse, and the old context-free repair call produced generic filler ("Positive momentum observed"). Recovery now fixes the JSON inside the conversation first (see the polish table). The tolerant parser now accepts fenced or prose-wrapped JSON without any repair call. The failing text wasn't captured, so the root cause is unknown. It's logged now, so watch the console for `output not valid JSON` warnings. Prediction #9 stays in the DB as it was.
 

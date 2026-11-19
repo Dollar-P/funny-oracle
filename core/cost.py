@@ -5,6 +5,12 @@
 - `record(...)`           → insert a row into llm_usage
 - `BudgetGuard.check_prediction(mode)` → raise BudgetExceeded before a prediction
 - `BudgetGuard.check_call()`           → raise BudgetExceeded before each LLM call
+
+Two figures are kept:
+- **tracked**: every search query at list price (what llm_usage.cost_usd stores; conservative).
+- **estimated actual**: the first `GEMINI_SEARCH_FREE_PER_MONTH` Gemini search queries of each
+  calendar month (UTC) are free, allocated in call order. Token costs are identical.
+The budget guard uses tracked unless `BUDGET_BASIS=actual`.
 """
 from __future__ import annotations
 
@@ -96,6 +102,61 @@ def total_spent_usd() -> float:
         return float(conn.execute("SELECT COALESCE(SUM(cost_usd),0) FROM llm_usage").fetchone()[0])
 
 
+def _is_gemini(model: str) -> bool:
+    return (model or "").removeprefix("models/").startswith("gemini")
+
+
+def _actual_rows() -> list[tuple[int, str | None, float, float, int, int]]:
+    """Every llm_usage row as (id, run_id, tracked_usd, actual_usd, search_calls, free_searches).
+
+    Free searches are allocated chronologically within each UTC month across all Gemini models
+    (Google's free tier is shared across Gemini 3+ models).
+    """
+    with connect() as conn:
+        rows = conn.execute("SELECT id, run_id, created_at, model, search_calls, cost_usd FROM llm_usage"
+                            " ORDER BY created_at, id").fetchall()
+    used: dict[str, int] = {}
+    out = []
+    for r in rows:
+        tracked = float(r["cost_usd"] or 0)
+        n = int(r["search_calls"] or 0)
+        free = 0
+        if n and _is_gemini(r["model"]):
+            month = (r["created_at"] or "")[:7]
+            left = max(0, config.GEMINI_SEARCH_FREE_PER_MONTH - used.get(month, 0))
+            free = min(n, left)
+            used[month] = used.get(month, 0) + n
+        on = None
+        try:
+            on = datetime.fromisoformat(r["created_at"]).date()
+        except (TypeError, ValueError):
+            pass
+        actual = max(0.0, tracked - free * price_for(r["model"] or "", on)["search"]) if free else tracked
+        out.append((int(r["id"]), r["run_id"], tracked, actual, n, free))
+    return out
+
+
+def total_actual_usd() -> float:
+    return sum(r[3] for r in _actual_rows())
+
+
+def run_cost_actual(run_id: str) -> float:
+    return sum(r[3] for r in _actual_rows() if r[1] == run_id)
+
+
+def spent_usd(basis: str | None = None) -> float:
+    """Spend on the configured budget basis (tracked | actual)."""
+    return total_actual_usd() if (basis or config.BUDGET_BASIS) == "actual" else total_spent_usd()
+
+
+def searches_this_month(now: datetime | None = None) -> int:
+    month = (now or datetime.now(timezone.utc)).strftime("%Y-%m")
+    with connect() as conn:
+        rows = conn.execute("SELECT model, COALESCE(SUM(search_calls),0) s FROM llm_usage"
+                            " WHERE substr(created_at,1,7) = ? GROUP BY model", (month,)).fetchall()
+    return sum(int(r["s"]) for r in rows if _is_gemini(r["model"]))
+
+
 def usd_to_thb(usd: float) -> float:
     return usd * config.USD_THB
 
@@ -108,9 +169,18 @@ def spend_summary() -> dict:
         ).fetchall()
         n_pred = conn.execute("SELECT mode, COUNT(*), AVG(cost_usd) FROM predictions GROUP BY mode").fetchall()
     spent = sum(r["c"] or 0 for r in rows)
+    actual = total_actual_usd()
+    month_searches = searches_this_month()
     return {
         "spent_usd": spent,
         "spent_thb": usd_to_thb(spent),
+        "tracked_usd": spent,
+        "tracked_thb": usd_to_thb(spent),
+        "estimated_actual_usd": actual,
+        "estimated_actual_thb": usd_to_thb(actual),
+        "budget_basis": config.BUDGET_BASIS,
+        "gemini_searches_this_month": month_searches,
+        "gemini_free_searches_left": max(0, config.GEMINI_SEARCH_FREE_PER_MONTH - month_searches),
         "budget_thb": config.BUDGET_THB,
         "by_model": [dict(r) for r in rows],
         "predictions": {r[0]: {"count": r[1], "avg_cost_usd": r[2]} for r in n_pred},
@@ -137,10 +207,10 @@ class BudgetGuard:
         return config.DEFAULT_ESTIMATE_USD.get(mode, 0.2)
 
     def remaining_usd(self) -> float:
-        return self.budget_usd - total_spent_usd()
+        return self.budget_usd - spent_usd()
 
     def check_prediction(self, mode: str) -> float:
-        spent = total_spent_usd()
+        spent = spent_usd()
         est = self.estimate_usd(mode)
         if spent + est > self.budget_usd:
             raise BudgetExceeded(
@@ -151,6 +221,6 @@ class BudgetGuard:
         return est
 
     def check_call(self) -> None:
-        spent = total_spent_usd()
+        spent = spent_usd()
         if spent >= self.budget_usd:
             raise BudgetExceeded(f"Budget guard: ฿{usd_to_thb(spent):.2f} spent, budget ฿{self.budget_thb:.0f} reached.")

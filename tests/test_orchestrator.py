@@ -200,3 +200,32 @@ def test_actual_from_bars():
     df = pd.DataFrame({"Close": [1, 2, 3, 4, 5]}, index=idx)
     assert scoreboard._actual_from_bars(df, idx[2].to_pydatetime()) == 3
     assert scoreboard._actual_from_bars(df, (idx[-1] + pd.Timedelta(minutes=5)).to_pydatetime()) is None
+
+
+def test_scalp_sigma_uses_horizon_scale_returns(fresh_db, monkeypatch):
+    calls = []
+
+    def fake_fetch(ticker, interval="1d", period=None):
+        calls.append((interval, period))
+        rng = np.random.default_rng(1)
+        n, freq = (1000, "15min") if interval == "15m" else (2000, "1min")
+        sig = 0.004 if interval == "15m" else 0.0005
+        close = 100 * np.exp(np.cumsum(rng.normal(0, sig, n)))
+        idx = pd.date_range(end=datetime.now(timezone.utc), periods=n, freq=freq)
+        return pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": 1}, index=idx)
+
+    monkeypatch.setattr("mcp_server.data_sources.fetch_ohlcv", fake_fetch)
+    p = run_pred(RoleFake(), ticker="BTC-USD", mode="scalp", horizon="15m")
+    assert ("15m", "60d") in calls
+    # σ_horizon ≈ 0.004 spread over 15 one-minute steps
+    assert p.forecast.sigma_per_step == pytest.approx(0.004 / 15 ** 0.5, rel=0.1)
+
+
+def test_scalp_sigma_falls_back_to_per_bar(fresh_db, synthetic_prices):
+    p = run_pred(RoleFake(), ticker="BTC-USD", mode="scalp", horizon="15m")  # daily synthetic data only
+    assert p.forecast.sigma_per_step == pytest.approx(0.02, rel=0.15)
+
+
+def test_prediction_records_tracked_and_actual_cost(fresh_db, synthetic_prices):
+    p = run_pred(RoleFake())
+    assert p.cost_actual_usd is not None and 0 <= p.cost_actual_usd <= p.cost_usd

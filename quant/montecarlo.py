@@ -36,6 +36,35 @@ def sigma_per_bar(close: pd.Series) -> float:
     return float(r.std(ddof=1))
 
 
+def horizon_returns(close: pd.Series, horizon_minutes: int) -> pd.Series:
+    """Overlapping log returns spanning exactly `horizon_minutes` of wall-clock time.
+
+    A return is kept only if the bar `horizon` minutes earlier exists (so returns across
+    overnight / weekend gaps or missing bars are excluded rather than inflating σ).
+    """
+    c = close.astype(float)
+    c = c[np.isfinite(c) & (c > 0)]
+    c = c[~c.index.duplicated(keep="last")].sort_index()
+    lagged = c.copy()
+    lagged.index = lagged.index + pd.Timedelta(minutes=horizon_minutes)
+    prev = lagged.reindex(c.index)
+    r = np.log(c / prev).dropna()
+    return r[np.isfinite(r)]
+
+
+def sigma_horizon_per_step(close: pd.Series, horizon_minutes: int, steps: int,
+                           min_returns: int = config.MIN_HORIZON_RETURNS) -> float | None:
+    """σ per simulation step derived from horizon-scale returns: σ_horizon / √steps.
+
+    Returns None when fewer than `min_returns` horizon returns exist (caller falls back).
+    """
+    r = horizon_returns(close, horizon_minutes)
+    if len(r) < min_returns or steps <= 0:
+        return None
+    s = float(r.std(ddof=1))
+    return s / math.sqrt(steps) if s > 0 else None
+
+
 def simulate(price_now: float, sigma: float, steps: int, s_final: float, *, lam: float = config.LAMBDA,
              paths: int = config.MC_PATHS, step_label: str = "bar", seed: int | None = None,
              fan_points: int = 100) -> Forecast:
