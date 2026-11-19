@@ -87,15 +87,13 @@ def _first_object(text: str) -> dict | None:
     return None
 
 
-def extract_json(text: str) -> Any:
-    """Tolerant JSON extraction from model text, tried in order:
-
-    1. the whole text as-is
-    2. the contents of ```json / ``` fences (any case)
-    3. the first complete outermost {...} object, ignoring leading/trailing prose
-    """
+def _candidates(text: str) -> list[str]:
     text = (text or "").strip().lstrip("\ufeff").strip()
-    for candidate in [text, *(b.strip() for b in _FENCE.findall(text))]:
+    return [text, *(b.strip() for b in _FENCE.findall(text))]
+
+
+def _extract_plain(text: str) -> dict | None:
+    for candidate in _candidates(text):
         try:
             obj = json.loads(candidate)
             if isinstance(obj, dict):  # agent outputs are always objects
@@ -105,6 +103,63 @@ def extract_json(text: str) -> Any:
         obj = _first_object(candidate)
         if obj is not None:
             return obj
+    return None
+
+
+_ESCAPED = re.compile(r'\\(["\\])')
+
+
+def _string_literals(text: str) -> list[str]:
+    """Decoded JSON string literals in `text` that look like they hold an object."""
+    out: list[str] = []
+    i = text.find('"')
+    while i != -1 and len(out) < 5:
+        try:
+            val, end = _DECODER.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i = text.find('"', i + 1)
+            continue
+        if isinstance(val, str) and "{" in val:
+            out.append(val)
+        i = text.find('"', max(end, i + 1))
+    return out
+
+
+def _unescaped_variants(text: str) -> list[str]:
+    """Texts to retry when the model escaped its JSON one level too many, e.g.
+    `{\\"argument\\": \\"...\\"}` (escaped object) or `"{\\"argument\\": ...}"` (object inside a JSON string)."""
+    variants: list[str] = []
+    for c in _candidates(text):
+        variants += _string_literals(c)               # a JSON string (alone or in prose) containing an object
+        if '\\"' in c or "\\\\" in c:
+            try:                                      # proper decoding (also handles \n, \t, \u\u2026)
+                v = json.loads('"' + c + '"')
+                if isinstance(v, str):
+                    variants.append(v)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            variants.append(_ESCAPED.sub(r"\1", c))   # one level of \" and \\ only
+    return list(dict.fromkeys(v for v in variants if v and v != text))
+
+
+def extract_json(text: str, _depth: int = 0) -> Any:
+    """Tolerant JSON extraction from model text, tried in order:
+
+    1. the whole text as-is
+    2. the contents of ```json / ``` fences (any case)
+    3. the first complete outermost {...} object, ignoring leading/trailing prose
+    4. the same after undoing one level of escaping: `\\"` / `\\\\`, or a JSON string literal that itself
+       contains the object (twice at most, for doubly escaped output)
+    """
+    obj = _extract_plain(text)
+    if obj is not None:
+        return obj
+    if _depth < 2:
+        for v in _unescaped_variants(text):
+            try:
+                return extract_json(v, _depth + 1)
+            except ValueError:
+                continue
     raise ValueError("no JSON object found in model output")
 
 

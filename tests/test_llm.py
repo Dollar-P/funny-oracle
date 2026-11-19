@@ -286,3 +286,53 @@ def test_tolerant_parse_avoids_any_repair_call(fresh_db):
     fake = FakeGemini([text_response(wrapped)])
     rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
     assert rep.ok and len(fake.requests) == 1
+
+
+# --- over-escaped JSON (seen in the R8 real runs: Bull opening on flash-lite) ---------------
+
+R8_BULL = {
+    "argument": "NVIDIA presents an exceptional buying opportunity over the next 1M, backed by stellar "
+                "fundamentals: 103.2% YoY revenue growth, a 74.92% gross margin, and approximately $99.24 billion "
+                "in free cash flow. Following a 31.44% monthly pullback, valuation has compressed to an attractive "
+                "trailing P/E of 16.65, a forward P/E of 9.33, and a PEG ratio of just 0.18.",
+    "strongest_opponent_point": "Founder CEO resignation creates a \"governance\" vacuum",
+}
+
+
+def _escape_once(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+R8_ESCAPED = _escape_once(json.dumps(R8_BULL))  # {\"argument\": \"NVIDIA … \\\"governance\\\" …\"}
+
+
+def test_r8_escaped_bull_case_is_recovered():
+    assert R8_ESCAPED.startswith('{\\"argument\\": \\"NVIDIA')  # same shape as the logged text
+    assert extract_json(R8_ESCAPED) == R8_BULL
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps(json.dumps(R8_BULL)),                              # object inside a JSON string
+    "Here you go: " + json.dumps(json.dumps(R8_BULL)) + " thanks",  # …with prose around it
+    f"```json\n{R8_ESCAPED}\n```",                                 # escaped object inside a fence
+    _escape_once(_escape_once(json.dumps(R8_BULL))),               # escaped twice
+    json.dumps(json.dumps(R8_BULL).replace('"argument"', '"argument"\n')),  # string with \n escapes
+])
+def test_extract_json_unescapes(text):
+    assert extract_json(text) == R8_BULL
+
+
+@pytest.mark.parametrize("text", ['"just a string"', '"{not json}"', '{\\"unterminated\\": ', json.dumps("[1, 2]")])
+def test_extract_json_unescape_still_rejects(text):
+    with pytest.raises(ValueError):
+        extract_json(text)
+
+
+def test_escaped_debate_turn_needs_no_repair_call(fresh_db):
+    from core.schemas import DebateOutput
+
+    fake = FakeGemini([text_response(R8_ESCAPED)])
+    res = run(LLM("gemini", client=fake).run_agent(agent="bull_opening", system="s", user="u", schema=DebateOutput,
+                                                   model=MODEL, max_turns=1))
+    assert res.error is None and res.output.argument == R8_BULL["argument"]
+    assert len(fake.requests) == 1  # parsed in code, no fix-up / JSON-mode call

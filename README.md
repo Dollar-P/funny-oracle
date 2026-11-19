@@ -11,8 +11,8 @@ simulation turns their verdict into a price range, and a scoreboard checks them 
 - **Grounded numbers:** the LLM only produces a direction score in [-1, +1]. The P10 / P50 / P90 range comes
   from 10,000 simulated paths using real historical volatility — a fully confident team can move the median
   by at most ½σ over the horizon.
-- **Honest:** the Scoreboard tracks direction hit rate vs 50%, P10–P90 band coverage, MAPE and an agent
-  leaderboard.
+- **Honest:** the Hall of Fame / Scoreboard tracks direction hit rate vs 50%, P10–P90 band coverage, MAPE,
+  and agent and model leaderboards.
 
 See `ARCHITECTURE.md` for the backend design, `REDESIGN.md` for the web UI, and `PROGRESS.md` for build
 status, decisions and known issues.
@@ -49,27 +49,11 @@ More: [debate](docs/arena_debate_real.png) · [agent drawer](docs/agent_drawer_r
   "The Oracle is out of coins". Optional synthesized sounds (🔇 off by default). `prefers-reduced-motion`
   turns off the drumroll, typewriter, confetti, rain and light sweeps.
 
-### Run it
+The original Streamlit app is still supported as a fallback:
 
-Needs Node.js (LTS is fine) once: `cd web; npm install; cd ..` (Python deps are in `requirements.txt`).
-
-```powershell
-scripts\dev.ps1           # dev: API :8000 (hot reload) + Vite :5173 → http://localhost:5173  (MOCK_LLM=true, ฿0)
-scripts\dev.ps1 -Real     # same, but real LLM calls (budget guard applies)
-
-# production / demo: one process serving the built UI + API
-cd web; npm run build; cd ..
-.venv\Scripts\python -m uvicorn api.main:app --port 8000          # → http://localhost:8000
-```
-
-**Mock mode** (`MOCK_LLM=true`, or `?mock=1` on a POST) replays a stored prediction as a fake live show
-with realistic timing (`MOCK_SPEED` scales it). No LLM calls, no cost, and nothing is saved. Use it for all
-UI work and rehearsals. Auto-Scalp is disabled in mock mode because it makes paid calls.
-
-API (all under `/api`): `models`, `tickers/search`, `quote/{t}`, `history/{t}`, `POST predictions`,
-`runs/{id}/events` (SSE; resumes with `Last-Event-ID`), `predictions`, `predictions/{id}`,
-`POST predictions/{id}/replay`, `POST duels`, `duels/{id}`, `scoreboard`, `budget`, `autoscalp/start|stop|status`.
-Up to 2 shows run at once (a duel uses both). A third gets HTTP 429, and a budget refusal returns HTTP 402.
+| Swing · Gold (light) | Swing · Gold (dark) | Scalp · BTC 15m |
+|---|---|---|
+| ![](docs/predict_gold_swing_light.png) | ![](docs/predict_gold_swing_dark.png) | ![](docs/predict_btc_scalp.png) |
 
 ## Setup (Windows / PowerShell)
 
@@ -77,38 +61,60 @@ Up to 2 shows run at once (a duel uses both). A third gets HTTP 429, and a budge
 py -3.14 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 copy .env.example .env      # then fill in GEMINI_API_KEY (FRED_API_KEY optional)
+cd web; npm install; cd ..  # web UI only; needs Node.js (LTS is fine)
 ```
 
-Models are configured only in `.env` (`ANALYST_MODEL`, `JUDGE_MODEL`, `SCALP_MODEL`). Check the IDs in
-Google AI Studio and add new models to the price table in `config.py` (`PRICES`). Unknown models are
-charged a deliberately pessimistic price.
+**Models.** The default is **gemini-3.5-flash-lite** for every role (`ANALYST_MODEL`, `JUDGE_MODEL`,
+`SCALP_MODEL` in `.env`). It's the cheapest, it's fast, and in practice it's good enough. In the Arena and Duel
+you can pick any configured model per run (e.g. gemini-3.8-flash for a pricier brain); the CLI and Streamlit
+use `.env`. New model IDs go in the price table in `config.py` (`PRICES`). Unknown models are charged a
+deliberately pessimistic price.
 
-## Streamlit app (fallback) and CLI
-
-| Swing · Gold (light) | Swing · Gold (dark) | Scalp · BTC 15m |
-|---|---|---|
-| ![](docs/predict_gold_swing_light.png) | ![](docs/predict_gold_swing_dark.png) | ![](docs/predict_btc_scalp.png) |
+## How to run
 
 ```powershell
-.venv\Scripts\streamlit run app.py                        # the original Streamlit app (still supported)
-.venv\Scripts\python orchestrator.py NVDA swing 1M        # one prediction in the terminal
+# Oracle Arena — development (two processes, hot reload; MOCK_LLM=true → ฿0)
+scripts\dev.ps1                       # API :8000 + Vite :5173 → http://localhost:5173
+scripts\dev.ps1 -Real                 # same, with real LLM calls (budget guard applies)
+
+# Oracle Arena — production / demo (one process serving the built UI + API)
+cd web; npm run build; cd ..
+.venv\Scripts\python -m uvicorn api.main:app --port 8000     # → http://localhost:8000
+
+# Streamlit app (fallback) and CLI — always real calls
+.venv\Scripts\streamlit run app.py                           # → http://localhost:8501  (?replay=<id> to replay)
+.venv\Scripts\python orchestrator.py NVDA swing 1M           # one prediction in the terminal
 .venv\Scripts\python orchestrator.py BTC-USD scalp 15m
-.venv\Scripts\python scripts\run_agents.py GC=F --agents all   # analysts only, no debate/judge
+.venv\Scripts\python scripts\run_agents.py GC=F --agents all # analysts only, no debate/judge
 .venv\Scripts\python scripts\auto_scalp.py --runs 4 --interval 900   # headless Auto-Scalp
 ```
 
-- **Swing:** horizons 1W / 1M / 3M on daily data. 5 analysts + 3-turn debate + judge (~14 LLM calls). About 10–15 s and ฿0.5–1.5 with flash-lite; about 40 s and ฿2–4 with gemini-3.8-flash (tracked cost, which charges every Google Search query; the free search tier usually makes the real bill lower).
-- **Scalp:** horizons 15m / 1h / 4h on 1m / 5m / 15m bars. Technical + Macro-lite + Psychology + Judge (~4 calls).
-  US stocks only move during market hours, so use BTC-USD for a scalp demo.
-- **Replay:** the sidebar can reload any stored prediction (no API cost), or open `http://localhost:8501/?replay=<id>`.
+**Mock mode** (`MOCK_LLM=true`, or `?mock=1` on a POST) replays a stored prediction as a fake live show
+with realistic timing (`MOCK_SPEED` scales it). No LLM calls, no cost, and nothing is saved. Use it for UI
+work and rehearsals. Auto-Scalp is disabled in mock mode because it makes paid calls.
+
+- **Swing:** horizons 1W / 1M / 3M on daily data. 5 analysts + 3-turn debate + judge (~14 LLM calls).
+  Observed on flash-lite: 25–50 s and ฿0.6–1.6 tracked (≈ ฿0.5–0.65 estimated actual). On gemini-3.8-flash:
+  35–45 s and ฿2–4 tracked.
+- **Scalp:** horizons 15m / 1h / 4h on 1m / 5m / 15m bars. Technical + Macro-lite + Psychology + Judge
+  (~4 calls), about ฿0.3. US stocks only move during market hours, so use BTC-USD for a scalp demo.
+- **Volatility:** swing uses 1 year of daily returns. Scalp uses returns over the whole horizon (15m / 1h / 4h)
+  from 60 days / 6 months / 1 year of bars.
+
+API (all under `/api`): `models`, `tickers/search`, `quote/{t}`, `history/{t}`, `POST predictions`,
+`runs/{id}/events` (SSE; resumes with `Last-Event-ID`), `predictions`, `predictions/{id}`,
+`POST predictions/{id}/replay`, `POST duels`, `duels/{id}`, `scoreboard`, `budget`, `autoscalp/start|stop|status`.
+Up to 2 shows run at once (a duel uses both). A third gets HTTP 429, and a budget refusal returns HTTP 402.
 
 ### Budget guard
 
 `BUDGET_THB` (default ฿100) is a hard cap. Before each prediction the guard compares *spent + estimate*
-with the budget and refuses if it would go over. The estimate is the average of recent predictions × 1.25.
-It also checks before every single LLM call. Spend lives in the `llm_usage` table and is shown in the
-sidebar. Auto-Scalp is also capped at `AUTO_SCALP_MAX_RUNS` (40) per session. As a second safety net, set a
-budget alert in Google Cloud Billing too.
+with the budget and refuses if it would go over (a duel checks both runs together). The estimate is that
+model's recent average × 1.25. The guard also checks before every single LLM call. Spend lives in the
+`llm_usage` table and is shown in two forms: **tracked** (every Google Search at list price, what the guard
+uses) and **estimated actual** (the first 5,000 Gemini searches a month free). Set `BUDGET_BASIS=actual` to
+budget on the latter. Auto-Scalp is also capped at `AUTO_SCALP_MAX_RUNS` (40) per session. As a second
+safety net, set a budget alert in Google Cloud Billing too.
 
 ## Use the MCP server from Claude Code
 
@@ -125,12 +131,15 @@ Tools: `get_price_history`, `get_indicators`, `get_fundamentals`, `get_macro`, `
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest -q                         # everything (network tests hit yfinance/FRED/CoinGecko)
+.venv\Scripts\python -m pytest -q                         # tests/ + api/tests (pytest.ini); network tests hit yfinance/FRED/CoinGecko
 .venv\Scripts\python -m pytest -q --ignore tests\test_mcp_tools.py --ignore tests\test_mcp_client.py   # offline
-.venv\Scripts\python scripts\ui_smoke.py GC=F swing 1M    # real end-to-end Predict click (costs one prediction)
+.venv\Scripts\python scripts\ui_smoke.py GC=F swing 1M    # real Streamlit Predict click (costs one prediction)
 ```
 
-Web API tests: `.venv\Scripts\python -m pytest -q api	ests` (mocked orchestrator and mock shows, no network).
+The LLM, orchestrator, Streamlit and Auto-Scalp tests use a scripted fake Gemini client built from real
+`google.genai` response types; the web API tests use the same fakes plus mock shows. None of them call the
+LLM API. `scripts\test_lmstudio.py` is a manual LM Studio probe, not part of the suite.
+
 Browser checks drive the real UI in headless Chrome (`playwright-core`, uses the installed Chrome) against a
 running server. Against a mock server they cost nothing:
 
@@ -144,9 +153,6 @@ node e2e\duel.mjs   http://localhost:5173 <outDir> NVDA swing 1M gemini-3.5-flas
 node e2e\mobile.mjs http://localhost:5173 <outDir> 10              # 390 px: no horizontal scroll
 ```
 
-The LLM, orchestrator, UI and Auto-Scalp tests use a scripted fake Gemini client built from real `google.genai`
-response types. They never call the API.
-
 ## Demo script (3–5 min)
 
 1. *"Five AIs argue about whether Bitcoin goes up or down."*
@@ -155,12 +161,10 @@ response types. They never call the API.
 3. Click a finished podium: score, key points, reasoning, full tool trace, sources.
 4. The **debate** types out (Bull → Bear rebuttal → Bull reply), then the drumroll and the Oracle's headline.
 5. The **fan chart**: the AI only nudges a Monte Carlo simulation built on real volatility. Hit **Share card**.
-6. **Duel**: a cheap model vs a pricier one on GOLD. Do they agree? What did each cost?
+6. **Duel**: flash-lite vs gemini-3.8-flash on GOLD. Do they agree? What did each cost?
 7. **Hall of Fame**: *"The AI is right X% of the time… a coin flip gets 50%."*
 8. Recap: MCP + agentic loop + debate + quant anchoring.
 
-No network or budget on the day? Run in mock mode, or open `/p/<id>` → **▶ Replay the show**.
-
-Before presenting, set `ANALYST_MODEL` / `JUDGE_MODEL` to `gemini-3.8-flash` in `.env`. Toggle Auto-Scalp
-(or run `scripts\auto_scalp.py`) at least an hour beforehand so the Scoreboard has evaluated predictions.
-Keep a few stored predictions ready to replay in case the network or budget fails.
+Start Auto-Scalp (Hall of Fame, or `scripts\auto_scalp.py`) at least an hour beforehand so there are
+evaluated predictions. No network or budget on the day? Run in mock mode, or open `/p/<id>` →
+**▶ Replay the show**.
