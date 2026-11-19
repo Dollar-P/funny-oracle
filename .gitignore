@@ -27,3 +27,5 @@ e2e-out/
 .idea/
 .DS_Store
 Thumbs.db
+# local-LLM eval results (scripts/eval_local_llm.py; they record the server URL)
+eval_*.json

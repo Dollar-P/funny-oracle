@@ -50,8 +50,11 @@ tests included).
   *exact* key values from the local `.env`): no Gemini, Anthropic or FRED key anywhere; `.env`, `data/*.db`
   and `logs/` were never committed; no stashes or unreachable objects. Note: the Gemini key in `.env` uses the
   newer `AQ.`-prefixed format, which an `AIza…` pattern alone would miss.
-- **Private IP** `localhost` (LM Studio host) was in `scripts/test_lmstudio.py`; the default is now
-  `LMSTUDIO_BASE_URL` or `localhost`. It remains in the history of commits `4fe9cb7` and `0c4e755` (see Known issues).
+- **Private LAN address** of the LM Studio host was hard-coded in `scripts/test_lmstudio.py` and
+  `scripts/eval_local_llm.py`. Both now read `LOCAL_BASE_URL` (env or `.env`, default `http://localhost:1234/v1`).
+  The address was also removed from the whole git history, and every commit's author/committer email was
+  changed to the GitHub noreply address, in one rewrite (pre-rewrite state kept in the local branch
+  `backup/pre-rewrite`, which must never be pushed).
 - **Seeds**: `data/seeds.json` (#4, #9, #10–#17, 209 KB) + `core/seeds.py` / `scripts/seeds.py`; the API loads
   them on startup into an empty DB, so a fresh clone runs mock mode and `/p/<id>` with no key.
 - `.gitignore` also covers `.env.*` (except the template), SQLite side files, e2e outputs, editor/OS files.
@@ -203,9 +206,8 @@ free for the first 5,000 queries a month.
 
 ## Known issues
 
-- **Before pushing**: the LAN IP `localhost` is still in the history of `scripts/test_lmstudio.py`
-  (commits `4fe9cb7`, `0c4e755`), and every commit's author email is the account address. Neither is a secret,
-  but both become public on push. Options are listed in the GitHub-readiness report.
+- **Local branch `backup/pre-rewrite`** still holds the pre-rewrite history (old email, LAN address). Push only
+  `main` (`git push -u origin main`), never `--all` / `--mirror`; delete the branch once the push is verified.
 
 - **flash-lite schema slips**: in the R8 runs, Business and Technical sometimes returned JSON missing required
   fields (`4 validation errors for AgentOutput`). The in-conversation fix-up recovered every case (all agents

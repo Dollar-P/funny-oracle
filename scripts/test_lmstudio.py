@@ -22,11 +22,19 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 
 import httpx
 
-# LM Studio server; set LMSTUDIO_BASE_URL (or pass --base-url) for a server on another machine
-DEFAULT_BASE = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+# Local OpenAI-compatible server (LM Studio etc.): LOCAL_BASE_URL from the environment or .env,
+# or --base-url on the command line. Never hard-code a LAN address here (it ends up on GitHub).
+try:  # optional: read .env like the rest of the project (the script itself only needs httpx)
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+DEFAULT_BASE = os.getenv("LOCAL_BASE_URL", "http://localhost:1234/v1")
 TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 
 AGENT_REPORT_SCHEMA = {
