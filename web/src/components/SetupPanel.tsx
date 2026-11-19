@@ -9,7 +9,7 @@ import { thb } from "../lib/format";
 import TickerSearch from "./TickerSearch";
 import PresetChips from "./PresetChips";
 import ModeHorizon from "./ModeHorizon";
-import ModelPicker from "./ModelPicker";
+import ModelPicker, { ThinkToggle, blockedReason } from "./ModelPicker";
 import OutOfCoins, { type Refusal } from "./OutOfCoins";
 import { useBudget } from "./BudgetMeter";
 
@@ -45,9 +45,11 @@ export default function SetupPanel() {
 
   const disabledReason = useMemo(() => {
     if (!analyst) return models.isLoading ? "Loading models…" : "No models configured — set an API key in .env";
+    const blocked = blockedReason(analyst, a.mode);
+    if (blocked) return blocked;
     if (overBudget) return `Over budget: ~${thb(est)} needed, ${thb(Math.max(0, remaining))} left`;
     return null;
-  }, [analyst, overBudget, est, remaining, models.isLoading]);
+  }, [analyst, overBudget, est, remaining, models.isLoading, a.mode]);
 
   async function start() {
     if (disabledReason || busy) return;
@@ -59,6 +61,7 @@ export default function SetupPanel() {
         horizon: a.horizon,
         analyst_model: a.analystModel,
         judge_model: a.judgeModel,
+        think_preset: analyst?.provider === "local" ? a.thinkPreset : null,
       });
       a.set({ runId: r.run_id });
     } catch (e) {
@@ -106,6 +109,11 @@ export default function SetupPanel() {
           onAnalyst={(id) => a.set({ analystModel: id })}
           onJudge={(id) => a.set({ judgeModel: id })}
         />
+        {analyst?.provider === "local" && (
+          <div className="mt-3">
+            <ThinkToggle value={a.thinkPreset} onChange={(p) => a.set({ thinkPreset: p })} />
+          </div>
+        )}
       </div>
       <div className="flex flex-col items-center gap-2 pt-2">
         <motion.button

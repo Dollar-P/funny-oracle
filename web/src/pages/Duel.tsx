@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import type { Mode, Prediction } from "../lib/types";
+import type { Mode, Prediction, ThinkPreset } from "../lib/types";
 import type { ShowState } from "../state/show";
 import { DEFAULT_HORIZON } from "../state/arena";
 import { useToasts } from "../state/settings";
 import TickerSearch from "../components/TickerSearch";
 import PresetChips from "../components/PresetChips";
 import ModeHorizon from "../components/ModeHorizon";
-import { ModelCard } from "../components/ModelPicker";
+import { ModelCard, ThinkToggle, blockedReason } from "../components/ModelPicker";
 import DuelLane from "../components/DuelLane";
 import HeadToHead from "../components/HeadToHead";
 import OutOfCoins, { type Refusal } from "../components/OutOfCoins";
@@ -52,6 +52,7 @@ export default function Duel() {
   const [results, setResults] = useState<Record<string, ShowState>>({});
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
+  const [thinkPreset, setThinkPreset] = useState<ThinkPreset>("quick");
 
   useEffect(() => {
     if (list.length && !a) setA(list[0].id);
@@ -70,13 +71,15 @@ export default function Duel() {
   const mb = list.find((m) => m.id === b);
   const est = (ma?.est_cost_thb[mode] ?? 0) + (mb?.est_cost_thb[mode] ?? 0);
   const remaining = budget.data?.remaining_thb ?? Infinity;
-  const reason = !ma || !mb ? "Pick two models" : !isMock && est > remaining ? `Over budget: ~${thb(est)} for both, ${thb(Math.max(0, remaining))} left` : null;
+  const blocked = (ma && blockedReason(ma, mode)) || (mb && blockedReason(mb, mode));
+  const anyLocal = ma?.provider === "local" || mb?.provider === "local";
+  const reason = !ma || !mb ? "Pick two models" : blocked ? blocked : !isMock && est > remaining ? `Over budget: ~${thb(est)} for both, ${thb(Math.max(0, remaining))} left` : null;
 
   async function start() {
     if (reason || !a || !b) return;
     setBusy(true);
     try {
-      const r = await api.startDuel({ ticker, mode, horizon, model_a: a, model_b: b });
+      const r = await api.startDuel({ ticker, mode, horizon, model_a: a, model_b: b, think_preset: anyLocal ? thinkPreset : null });
       setResults({});
       setRun({ duelId: r.duel_id, runIds: r.run_ids, mock: r.mock });
     } catch (e) {
@@ -134,6 +137,7 @@ export default function Duel() {
               </div>
             ))}
           </div>
+          {anyLocal && <ThinkToggle value={thinkPreset} onChange={setThinkPreset} />}
           <div className="flex flex-col items-center gap-2">
             <button
               onClick={start}

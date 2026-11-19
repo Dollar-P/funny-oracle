@@ -61,6 +61,7 @@ export function direction(s: number): "bull" | "bear" | "neutral" {
 
 export function shortModel(id: string | null | undefined): string {
   if (!id) return "—";
+  if (id.startsWith("local:")) return `${id.slice(6).split("/").pop()} (local)`;
   return id
     .replace(/^gemini-/, "Gemini ")
     .replace(/^claude-/, "Claude ")

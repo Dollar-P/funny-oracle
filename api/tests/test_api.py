@@ -349,3 +349,88 @@ def datetime_from(s):
     from datetime import datetime
 
     return datetime.fromisoformat(s)
+
+
+# --- local models (LOCAL_LLM.md) ------------------------------------------------------------------
+
+LOCAL = "local:prism-ml/bonsai-27b"
+
+
+@pytest.fixture()
+def lm_studio(monkeypatch):
+    from api.routes import models as mr
+
+    monkeypatch.setattr(mr, "local_server_models", lambda: (["prism-ml/bonsai-27b", "gemma-3-1b-it"], None))
+
+
+@pytest.fixture()
+def captured_starts(monkeypatch):
+    from api.runs import MANAGER
+
+    seen = []
+
+    def fake_start(params, duel_id=None):
+        seen.append(params)
+        return MANAGER.start_mock(params, lambda run: _noop(), duel_id=duel_id)
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(MANAGER, "start_real", fake_start)
+    return seen
+
+
+def test_local_models_listed_free_and_not_for_scalp(client, lm_studio):
+    ms = {m["id"]: m for m in client.get("/api/models").json()["models"]}
+    assert LOCAL in ms and "local:gemma-3-1b-it" in ms
+    m = ms[LOCAL]
+    assert m["provider"] == "local" and m["available"] and m["price_in"] == 0 and m["est_cost_thb"]["swing"] == 0
+    assert m["scalp_ok"] is False and "too slow for Scalp" in m["scalp_reason"]
+    assert m["think_presets"] == ["quick", "deep"] and m["supports_search"] is False
+    assert ms["gemini-3.5-flash-lite"]["scalp_ok"] is True
+    assert not any(k == "local:" for k in ms)          # the price-table entry is not a model
+
+
+def test_unreachable_local_server(client, monkeypatch):
+    from api.routes import models as mr
+
+    monkeypatch.setattr(mr, "local_server_models", lambda: (None, "LM Studio not reachable at LOCAL_BASE_URL (ConnectError)"))
+    monkeypatch.delenv("LOCAL_BASE_URL", raising=False)
+    assert not [m for m in client.get("/api/models").json()["models"] if m["provider"] == "local"]
+    monkeypatch.setenv("LOCAL_BASE_URL", "http://lm-studio.test:1234/v1")       # configured but down → shown, disabled
+    loc = [m for m in client.get("/api/models").json()["models"] if m["provider"] == "local"]
+    assert len(loc) == 1 and loc[0]["available"] is False and "not reachable" in loc[0]["unavailable_reason"]
+
+
+def test_scalp_refuses_local_models(client):
+    r = client.post("/api/predictions", json={"ticker": "BTC-USD", "mode": "scalp", "horizon": "15m", "analyst_model": LOCAL})
+    assert r.status_code == 422 and "too slow for Scalp" in r.json()["detail"]
+    d = client.post("/api/duels", json={"ticker": "BTC-USD", "mode": "scalp", "horizon": "15m",
+                                        "model_a": LOCAL, "model_b": "gemini-3.5-flash-lite"})
+    assert d.status_code == 422 and "too slow for Scalp" in d.json()["detail"]
+
+
+def test_local_real_run_gets_preset_and_ignores_budget(client, real_mode, captured_starts, monkeypatch):
+    monkeypatch.setattr(config, "BUDGET_THB", 0.0)     # budget gone: local still allowed (free)
+    r = client.post("/api/predictions", json={"ticker": "NVDA", "mode": "swing", "horizon": "1M",
+                                              "analyst_model": LOCAL, "think_preset": "quick"})
+    assert r.status_code == 200
+    assert captured_starts[-1]["analyst_model"] == LOCAL and captured_starts[-1]["judge_model"] == LOCAL
+    assert captured_starts[-1]["think_preset"] == "quick"
+    bad = client.post("/api/predictions", json={"ticker": "NVDA", "analyst_model": LOCAL, "think_preset": "medium"})
+    assert bad.status_code == 422
+
+
+def test_duel_local_vs_gemini(client, real_mode, captured_starts):
+    r = client.post("/api/duels", json={"ticker": "NVDA", "mode": "swing", "horizon": "1M", "model_a": LOCAL,
+                                        "model_b": "gemini-3.5-flash-lite", "think_preset": "quick"})
+    assert r.status_code == 200
+    a, b = captured_starts[-2:]
+    assert (a["analyst_model"], b["analyst_model"]) == (LOCAL, "gemini-3.5-flash-lite")
+    assert a["think_preset"] == "quick" and b["judge_model"] == "gemini-3.5-flash-lite"
+
+
+def test_duel_with_gemini_side_still_budget_checked(client, real_mode, captured_starts, monkeypatch):
+    monkeypatch.setattr(config, "BUDGET_THB", 0.0)
+    r = client.post("/api/duels", json={"ticker": "NVDA", "model_a": LOCAL, "model_b": "gemini-3.5-flash-lite"})
+    assert r.status_code == 402 and captured_starts == []

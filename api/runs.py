@@ -149,7 +149,8 @@ class RunManager:
                 asyncio.run(orchestrator.run_prediction(
                     params["ticker"], params["mode"], params["horizon"], source=params.get("source", "web"),
                     analyst_model=params.get("analyst_model"), judge_model=params.get("judge_model"),
-                    on_event=on_event, run_id=run.run_id, duel_id=duel_id))
+                    on_event=on_event, run_id=run.run_id, duel_id=duel_id,
+                    think_preset=params.get("think_preset")))
             except Exception as e:  # orchestrator already emitted a fatal error event
                 log.warning("run %s failed: %s", run.run_id, e)
                 if run.error is None:
