@@ -14,6 +14,10 @@ simulation turns their verdict into a price range, and a scoreboard checks them 
 - **Honest:** the Scoreboard tracks direction hit rate vs 50%, P10–P90 band coverage, MAPE and an agent
   leaderboard.
 
+| Swing · Gold (light) | Swing · Gold (dark) | Scalp · BTC 15m |
+|---|---|---|
+| ![](docs/predict_gold_swing_light.png) | ![](docs/predict_gold_swing_dark.png) | ![](docs/predict_btc_scalp.png) |
+
 See `ARCHITECTURE.md` for the design and `PROGRESS.md` for build status, decisions and known issues.
 
 ## Setup (Windows / PowerShell)
