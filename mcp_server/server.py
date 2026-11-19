@@ -31,6 +31,7 @@ import config  # noqa: E402
 from core.asset import classify, normalize  # noqa: E402
 from mcp_server import data_sources as ds  # noqa: E402
 from mcp_server import indicators as ind  # noqa: E402
+from mcp_server import web_tools as web  # noqa: E402
 
 mcp = MCPServer(
     "market-data-mcp",
@@ -205,9 +206,26 @@ def get_onchain_lite(coin: str) -> dict:
     return ds.fetch_onchain_lite(coin)
 
 
+@mcp.tool()
+@safe_tool
+def web_search(query: str, limit: int = 6) -> dict:
+    """Search the web/news (for models without built-in search). Returns title, url, source, date, snippet.
+    Prefer specific queries, e.g. "NVIDIA earnings guidance November 2026". Follow up with fetch_url on the
+    1-2 most relevant urls."""
+    return web.web_search(query, limit)
+
+
+@mcp.tool()
+@safe_tool
+def fetch_url(url: str, max_chars: int = 1500) -> dict:
+    """Read one public web page (article text, max 1,500 chars) from a url returned by web_search."""
+    return web.fetch_url(url, max_chars)
+
+
 TOOLS = {
     f.__name__: f
-    for f in (get_price_history, get_indicators, get_fundamentals, get_macro, get_news, get_sentiment, get_onchain_lite)
+    for f in (get_price_history, get_indicators, get_fundamentals, get_macro, get_news, get_sentiment, get_onchain_lite,
+              web_search, fetch_url)
 }
 
 
