@@ -47,6 +47,21 @@ CREATE INDEX IF NOT EXISTS ix_pred_target ON predictions(target_time, actual_pri
 
 _initialized: set[str] = set()
 
+# Additive columns (REDESIGN): per-run models and duel grouping.
+MIGRATIONS = {
+    "predictions": [("analyst_model", "TEXT"), ("judge_model", "TEXT"), ("duel_id", "TEXT"),
+                    ("cost_actual_usd", "REAL")],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, typ in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_pred_duel ON predictions(duel_id)")
+
 
 def db_path() -> Path:
     return Path(config.DB_PATH)
@@ -62,6 +77,7 @@ def connect():
         try:
             if str(path) not in _initialized:
                 conn.executescript(SCHEMA)
+                _migrate(conn)
                 _initialized.add(str(path))
             yield conn
             conn.commit()

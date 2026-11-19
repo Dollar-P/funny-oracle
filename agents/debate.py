@@ -59,6 +59,9 @@ async def run_debate(llm: LLM, model: str, ctx: Context, reports: list[AgentRepo
         if res.output is None:
             break
         out: DebateOutput = res.output  # type: ignore[assignment]
-        turns.append(DebateArgument(side=side, turn=turn, argument=clip_words(out.argument, limit),  # type: ignore[arg-type]
-                                    strongest_opponent_point=out.strongest_opponent_point))
+        arg = DebateArgument(side=side, turn=turn, argument=clip_words(out.argument, limit),  # type: ignore[arg-type]
+                             strongest_opponent_point=out.strongest_opponent_point)
+        turns.append(arg)
+        await llm.events.emit("debate_turn", side=side, turn=len(turns), turn_name=turn, text=arg.argument,
+                              responding_to=arg.strongest_opponent_point if len(turns) > 1 else None)
     return turns

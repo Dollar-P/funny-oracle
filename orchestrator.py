@@ -23,6 +23,7 @@ from agents.news_researcher import NewsResearcher
 from core import cost, scoreboard
 from core.asset import classify, normalize
 from core.cost import BudgetGuard
+from core.events import NULL_SINK, EventSink, OnEvent
 from core.llm import LLM, ToolExecutor
 from core.mcp_client import MarketDataClient
 from core.schemas import AgentReport, Prediction
@@ -35,17 +36,22 @@ Progress = Callable[[str], None]
 
 
 class _AgentExecutor:
-    """Per-agent view of the MCP client that reports live progress ("Technical calling get_indicators…")."""
+    """Per-agent view of the MCP client that reports live progress ("Technical calling get_indicators…")
+    and emits tool_call / tool_result events."""
 
-    def __init__(self, base: ToolExecutor, agent: str, progress: Progress):
-        self.base, self.agent, self.progress = base, agent, progress
+    def __init__(self, base: ToolExecutor, agent: str, progress: Progress, events: EventSink = NULL_SINK):
+        self.base, self.agent, self.progress, self.events = base, agent, progress, events
 
     async def list_tools(self):
         return await self.base.list_tools()
 
     async def call(self, name, args=None):
         self.progress(f"{self.agent.title()} agent calling {name}({', '.join(f'{k}={v}' for k, v in (args or {}).items())})")
-        return await self.base.call(name, args)
+        await self.events.emit("tool_call", agent=self.agent, tool=name, args=dict(args or {}))
+        data, tc = await self.base.call(name, args)
+        await self.events.emit("tool_result", agent=self.agent, tool=name, ms=tc.latency_ms, bytes=tc.result_bytes,
+                               ok=tc.error is None, error=tc.error)
+        return data, tc
 
 
 def _validate(mode: str, horizon: str) -> None:
@@ -53,6 +59,17 @@ def _validate(mode: str, horizon: str) -> None:
         raise ValueError(f"mode must be one of {list(config.HORIZONS)}")
     if horizon not in config.HORIZONS[mode]:
         raise ValueError(f"horizon for {mode} must be one of {list(config.HORIZONS[mode])}")
+
+
+def resolve_models(mode: str, provider: str | None = None, analyst_model: str | None = None,
+                   judge_model: str | None = None) -> dict[str, str]:
+    """Per-run override (REDESIGN §2.1); None falls back to .env for that role."""
+    models = dict(config.models_for(mode, provider))
+    if analyst_model:
+        models["analyst"] = analyst_model
+    if judge_model:
+        models["judge"] = judge_model
+    return models
 
 
 async def _search_mode(llm: LLM, model: str, mode: str) -> str:
@@ -93,29 +110,70 @@ async def _with_timeout(coro, agent: str, timeout: float) -> AgentReport:
                            error=f"timeout after {timeout:.0f}s")
 
 
+async def _cost_update(events: EventSink, run_id: str, budget_thb: float) -> None:
+    if not events.enabled:
+        return
+    await events.emit("cost_update", run_cost_thb=cost.usd_to_thb(cost.run_cost(run_id)),
+                      run_cost_actual_thb=cost.usd_to_thb(cost.run_cost_actual(run_id)),
+                      total_spent_thb=cost.usd_to_thb(cost.total_spent_usd()),
+                      total_actual_thb=cost.usd_to_thb(cost.total_actual_usd()), budget_thb=budget_thb)
+
+
 async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", *,
                          progress: Progress | None = None, source: str = "manual",
                          llm: LLM | None = None, executor: ToolExecutor | None = None,
-                         save: bool = True, seed: int | None = None) -> Prediction:
+                         save: bool = True, seed: int | None = None,
+                         on_event: OnEvent | None = None, analyst_model: str | None = None,
+                         judge_model: str | None = None, run_id: str | None = None,
+                         duel_id: str | None = None) -> Prediction:
+    """One prediction end to end.
+
+    on_event: async callback receiving every run event (REDESIGN §2.2); None → no events.
+    analyst_model / judge_model: per-run override; None → the model from .env for that role.
+    """
+    run_id = run_id or uuid.uuid4().hex
+    events = EventSink(on_event, run_id)
+    try:
+        return await _run(ticker, mode, horizon, progress=progress, source=source, llm=llm, executor=executor,
+                          save=save, seed=seed, events=events, analyst_model=analyst_model,
+                          judge_model=judge_model, run_id=run_id, duel_id=duel_id)
+    except cost.BudgetExceeded as e:
+        await events.emit("error", message=str(e), fatal=True, kind="budget")
+        raise
+    except Exception as e:
+        await events.emit("error", message=f"{type(e).__name__}: {e}"[:400], fatal=True, kind="error")
+        raise
+
+
+async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, seed, events: EventSink,
+               analyst_model, judge_model, run_id, duel_id) -> Prediction:
     t0 = time.perf_counter()
     say = progress or (lambda m: log.info(m))
     _validate(mode, horizon)
     ticker = normalize(ticker)
     asset = classify(ticker)                                         # [1]
     hz = config.HORIZONS[mode][horizon]
-    run_id = uuid.uuid4().hex
-    llm = llm or LLM(run_id=run_id)
+    if llm is None:
+        provider = config.provider_for(analyst_model) if analyst_model else None
+        llm = LLM(provider=provider, run_id=run_id)
     llm.run_id = run_id
+    llm.events = events
+    models = resolve_models(mode, llm.provider, analyst_model, judge_model)
+    for role, m in models.items():
+        if m and config.provider_for(m, llm.provider) != llm.provider:
+            raise ValueError(f"{role} model {m!r} is not a {llm.provider} model; one provider per run")
     guard: BudgetGuard = llm.guard
-    est = guard.check_prediction(mode)                                # budget guard BEFORE any API call
+    est = guard.check_prediction(mode, models["analyst"])             # budget guard BEFORE any API call
     say(f"Budget OK — estimated ฿{cost.usd_to_thb(est):.2f}, remaining ฿{cost.usd_to_thb(guard.remaining_usd()):.2f}")
 
     weights = config.WEIGHTS[mode][asset]                             # [2]
     active = [a for a in config.AGENTS if weights.get(a, 0) > 0]
-    models = config.models_for(mode, llm.provider)
     analyst_kw: dict = {}
     if mode == "scalp":
         analyst_kw = {"max_turns": 3}
+    await events.emit("run_started", ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, models=models,
+                      agents=active, weights=weights, est_cost_thb=cost.usd_to_thb(est), duel_id=duel_id,
+                      budget_thb=guard.budget_thb, mock=False)
 
     # price data for the quant engine (doesn't need the LLM)
     say(f"Fetching volatility history for {ticker}")
@@ -131,25 +189,41 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
 
     ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"])
 
+    async def run_one(ag) -> AgentReport:
+        await events.emit("agent_started", agent=ag.name)
+        r = await _with_timeout(ag.run(ctx), ag.name, config.AGENT_TIMEOUT_S)
+        if r.ok:
+            await events.emit("agent_done", agent=r.agent, report=r.model_dump(mode="json"))
+        else:
+            await events.emit("agent_failed", agent=r.agent,
+                              reason="timeout" if (r.error or "").startswith("timeout") else "error", detail=r.error)
+        await _cost_update(events, run_id, guard.budget_thb)
+        return r
+
     own_client = executor is None
     mc = MarketDataClient() if own_client else executor
     if own_client:
         await mc.__aenter__()  # type: ignore[union-attr]
     try:
+        if mode == "swing":
+            await events.emit("stage", name="news")
         search_mode = await _search_mode(llm, models["analyst"], mode)
         say(f"Search mode: {search_mode}")
         if search_mode in ("news_search", "news_tool"):
             say("News Researcher gathering headlines")
-            nr = NewsResearcher(llm, models["analyst"], mc, "search" if search_mode == "news_search" else "tool")
+            nr = NewsResearcher(llm, models["analyst"], _AgentExecutor(mc, NewsResearcher.name, say, events),
+                                "search" if search_mode == "news_search" else "tool")
             ctx.news, _, _, err = await nr.run(ctx)
             if err:
                 say(f"News Researcher failed: {err}")
+            if ctx.news is not None:
+                await events.emit("news_brief", bullets=ctx.news.bullets, links=ctx.news.links)
 
+        await events.emit("stage", name="analysts")
         say(f"Running {len(active)} analysts in parallel: {', '.join(active)}")      # [3]
-        agents = [REGISTRY[a](llm, models["analyst"], _AgentExecutor(mc, a, say),
+        agents = [REGISTRY[a](llm, models["analyst"], _AgentExecutor(mc, a, say, events),
                               enable_search=search_mode == "grounded", **analyst_kw) for a in active]
-        reports = list(await asyncio.gather(*(_with_timeout(ag.run(ctx), ag.name, config.AGENT_TIMEOUT_S)
-                                              for ag in agents)))
+        reports = list(await asyncio.gather(*(run_one(ag) for ag in agents)))
         for r in reports:
             say(f"{r.agent}: " + (f"score {r.score:+.2f} (conf {r.confidence:.2f})" if r.ok else f"⚠ absent — {r.error}"))
     finally:
@@ -159,12 +233,17 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
     ok = [r for r in reports if r.ok]
     s_raw = weighted_score({r.agent: (r.score, r.confidence) for r in ok}, weights)   # [4]
     say(f"S_raw = {s_raw:+.3f}")
+    await events.emit("stage", name="aggregate")
+    await events.emit("aggregate", s_raw=s_raw, weights=weights, present=[r.agent for r in ok])
 
     debate, verdict = [], None
     if ok:
         if mode == "swing":                                                            # [5]
+            await events.emit("stage", name="debate")
             say("Bull vs Bear debate: Bull opens → Bear rebuts → Bull replies")
             debate = await run_debate(llm, models["judge"], ctx, reports, s_raw, config.ANALYST_THINKING)
+            await _cost_update(events, run_id, guard.budget_thb)
+        await events.emit("stage", name="judge")
         say("Judge deliberating")                                                       # [6]
         verdict, err = await Judge(llm, models["judge"]).run(ctx, reports, debate, s_raw)
         if err:
@@ -177,22 +256,34 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
         confidence = sum(r.confidence for r in ok) / len(ok)
     else:
         confidence = 0.0
+    await events.emit("judge", verdict=verdict.model_dump(mode="json") if verdict else None, s_raw=s_raw,
+                      s_final=s_final, confidence=confidence)
 
+    await events.emit("stage", name="quant")
     forecast = simulate(price_now, sigma, steps, s_final, step_label=hz["interval"], seed=seed)
     say(f"Monte Carlo: P10 {forecast.p10:,.2f} | P50 {forecast.p50:,.2f} | P90 {forecast.p90:,.2f}")
 
     now = datetime.now(timezone.utc)
+    target_time = (now + timedelta(minutes=hz["minutes"])).isoformat(timespec="seconds")
+    await events.emit("quant", price_now=forecast.price_now, p10=forecast.p10, p50=forecast.p50, p90=forecast.p90,
+                      prob_up=forecast.prob_up, fan=forecast.fan, steps=forecast.steps,
+                      step_label=forecast.step_label, sigma_per_step=forecast.sigma_per_step,
+                      target_time=target_time)
     pred = Prediction(
         created_at=now.isoformat(timespec="seconds"), ticker=ticker, asset_type=asset, mode=mode,  # type: ignore[arg-type]
-        horizon=horizon, target_time=(now + timedelta(minutes=hz["minutes"])).isoformat(timespec="seconds"),
+        horizon=horizon, target_time=target_time,
         s_raw=s_raw, s_final=s_final, confidence=confidence, weights=weights, reports=reports, news=ctx.news,
         debate=debate, verdict=verdict, forecast=forecast, cost_usd=cost.run_cost(run_id),
         cost_actual_usd=cost.run_cost_actual(run_id),
         elapsed_s=round(time.perf_counter() - t0, 1), search_mode=search_mode,
+        models=models, run_id=run_id, duel_id=duel_id,
     )
     if save:                                                                            # [8]
         scoreboard.save(pred, run_id, source)
         say(f"Saved prediction #{pred.id} (cost tracked ${pred.cost_usd:.4f}, est. actual ${pred.cost_actual_usd or 0:.4f})")
+    await _cost_update(events, run_id, guard.budget_thb)
+    await events.emit("stage", name="done")
+    await events.emit("run_done", prediction_id=pred.id, prediction=pred.model_dump(mode="json"))
     return pred
 
 

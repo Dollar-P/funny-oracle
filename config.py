@@ -59,6 +59,13 @@ def models_for(mode: str, provider: str | None = None) -> dict[str, str]:
     return {"analyst": ANALYST_MODEL, "judge": JUDGE_MODEL}
 
 
+def provider_for(model: str | None, default: str | None = None) -> str:
+    """Provider a model ID belongs to (claude-* → claude, else gemini)."""
+    if not model:
+        return default or LLM_PROVIDER
+    return "claude" if model.removeprefix("models/").startswith("claude") else "gemini"
+
+
 # --- Pricing (USD per 1M tokens; search USD per request) — §4.10 ---------------
 # Update when providers change prices. Thinking tokens are billed as output.
 # Gemini: https://ai.google.dev/gemini-api/docs/pricing (checked 2026-11-19).
@@ -95,6 +102,8 @@ USD_THB = float(_env("USD_THB", "33"))
 # Pre-prediction estimate when there is no history yet (USD). Replaced by the
 # observed average × 1.25 once real predictions exist.
 DEFAULT_ESTIMATE_USD = {"swing": 0.20, "scalp": 0.05}
+# Defaults above are sized for this model; pricier models scale the default up by token price.
+REFERENCE_PRICE_MODEL = "gemini-3.8-flash"
 AUTO_SCALP_MAX_RUNS = int(_env("AUTO_SCALP_MAX_RUNS", "40"))
 AUTO_SCALP_INTERVAL_S = int(_env("AUTO_SCALP_INTERVAL_S", "900"))
 

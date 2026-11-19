@@ -1,5 +1,18 @@
 # Progress
 
+## Redesign — "The Oracle Arena" (REDESIGN.md)
+
+| # | Checkpoint | Status | Verified by |
+|---|---|---|---|
+| R1 | Event hook + per-run model override | ✅ done | `pytest tests/test_events.py` (15: full swing event order, scalp stages, agent_failed error/timeout, news_brief, search events, no-callback path, broken callback, budget refusal → fatal `error`, model override used per role + stored, per-role .env fallback, cross-provider rejected, per-model estimate); full suite 132 passed; `orchestrator.py` CLI unchanged |
+
+### Redesign decisions
+
+- **R1 events** live in `core/events.py` (`EventSink`, a no-op when `on_event=None`). Envelope `{type, run_id, ts (epoch ms), seq}`. The `LLM` object carries the sink (`llm.events`) so agents/debate/backends emit without signature changes; tool events come from the per-agent executor wrapper. Payload notes: `agent_done.report` = AgentReport JSON; `agent_failed.reason` ∈ timeout/error + `detail`; `debate_turn.turn` 1–3 plus `turn_name`; `judge` carries `verdict` (or null), `s_raw`, `s_final`, `confidence`; `quant.fan` is the dict `{step,p10,p50,p90}`; `cost_update` has tracked and estimated-actual figures. **Extra event** `news_brief` (bullets, links) when the News Researcher runs. `stage: news` is emitted in swing only (scalp has no news step). A failing callback is logged and ignored.
+- **Model override**: `run_prediction(..., analyst_model=, judge_model=, run_id=, duel_id=)`. None → `.env` per role. Provider is inferred from the model ID (`config.provider_for`); mixing providers in one run raises `ValueError`. `Prediction` gains `models`, `run_id`, `duel_id`; `predictions` gains `analyst_model`, `judge_model`, `duel_id`, `cost_actual_usd` (additive `ALTER TABLE` migration in `core/db.py`).
+- **Per-model estimate**: `BudgetGuard.estimate_usd(mode, model)` = that model's last-10 average × 1.25; without history the mode default scaled by token price vs `gemini-3.8-flash` (never below 1×).
+
+
 | # | Checkpoint | Status | Verified by |
 |---|---|---|---|
 | 1 | Project setup, venv, `.env` | ✅ done | `python -c "import yfinance, google.genai, mcp"` |

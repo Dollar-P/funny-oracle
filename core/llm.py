@@ -26,6 +26,7 @@ from pydantic import BaseModel, ValidationError
 import config
 from core import cache, cost
 from core.cost import BudgetGuard, Usage
+from core.events import NULL_SINK, EventSink
 from core.schemas import ToolCall
 
 log = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ class LLM:
         self.provider = (provider or config.LLM_PROVIDER).lower()
         self.run_id = run_id
         self.guard = guard or BudgetGuard()
+        self.events: EventSink = NULL_SINK  # set per run by the orchestrator (REDESIGN §2.1)
         if self.provider == "gemini":
             self.backend: _Backend = GeminiBackend(self, client)
         elif self.provider == "claude":
@@ -354,6 +356,8 @@ class GeminiBackend:
             queries = self._search_queries(resp)
             if queries:
                 searched = True
+                for q in queries:
+                    await self.llm.events.emit("search", agent=agent, query=q)
                 trace.append(ToolCall(tool="google_search", args={"queries": queries},
                                       result_bytes=len(gm.grounding_chunks or []) if gm else 0))
             if gm is not None:
@@ -497,6 +501,7 @@ class ClaudeBackend:
             for b in resp.content:
                 if b.type == "server_tool_use":
                     searched = True
+                    await self.llm.events.emit("search", agent=agent, query=str((b.input or {}).get("query", "")))
                     trace.append(ToolCall(tool="web_search", args=dict(b.input or {})))
                 elif b.type == "web_search_tool_result" and isinstance(b.content, list):
                     sources += [f"{r.title} | {r.url}" for r in b.content if getattr(r, "url", None)]

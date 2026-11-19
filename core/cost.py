@@ -195,23 +195,31 @@ class BudgetGuard:
     def budget_usd(self) -> float:
         return self.budget_thb / config.USD_THB
 
-    def estimate_usd(self, mode: str) -> float:
-        """Observed average of the last 10 predictions of this mode × 1.25, else a default."""
+    def estimate_usd(self, mode: str, model: str | None = None) -> float:
+        """Observed average of the last 10 predictions × 1.25, else a default.
+
+        With `model`: history of that analyst model only; without history, the mode default
+        scaled by the model's token price relative to REFERENCE_PRICE_MODEL (never below 1×).
+        Without `model`: history of the mode across all models (legacy behaviour).
+        """
+        q = ("SELECT AVG(cost_usd), COUNT(*) FROM (SELECT cost_usd FROM predictions WHERE mode = ? AND cost_usd > 0"
+             + (" AND analyst_model = ?" if model else "") + " ORDER BY id DESC LIMIT 10)")
         with connect() as conn:
-            row = conn.execute(
-                "SELECT AVG(cost_usd), COUNT(*) FROM (SELECT cost_usd FROM predictions WHERE mode = ? AND cost_usd > 0"
-                " ORDER BY id DESC LIMIT 10)", (mode,)
-            ).fetchone()
+            row = conn.execute(q, (mode, model) if model else (mode,)).fetchone()
         if row and row[1]:
             return max(float(row[0]) * 1.25, 0.001)
-        return config.DEFAULT_ESTIMATE_USD.get(mode, 0.2)
+        base = config.DEFAULT_ESTIMATE_USD.get(mode, 0.2)
+        if model:
+            p, ref = price_for(model), price_for(config.REFERENCE_PRICE_MODEL)
+            base *= max(1.0, (p["in"] + p["out"]) / (ref["in"] + ref["out"]))
+        return base
 
     def remaining_usd(self) -> float:
         return self.budget_usd - spent_usd()
 
-    def check_prediction(self, mode: str) -> float:
+    def check_prediction(self, mode: str, model: str | None = None) -> float:
         spent = spent_usd()
-        est = self.estimate_usd(mode)
+        est = self.estimate_usd(mode, model)
         if spent + est > self.budget_usd:
             raise BudgetExceeded(
                 f"Budget guard: spent ฿{usd_to_thb(spent):.2f} + estimated ฿{usd_to_thb(est):.2f} for this "

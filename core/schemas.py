@@ -98,3 +98,6 @@ class Prediction(BaseModel):
     cost_actual_usd: float | None = None  # estimated actual (free monthly search tier applied)
     elapsed_s: float = 0.0
     search_mode: str = "off"  # grounded | news_fallback | off
+    models: dict[str, str] = Field(default_factory=dict)  # role → model ID used for this run
+    run_id: str | None = None
+    duel_id: str | None = None   # shared by both runs of a Model-vs-Model duel
