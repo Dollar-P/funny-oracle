@@ -1,7 +1,7 @@
 # Progress
 
 Status as of 2026-11-20. Default model: **gemini-3.5-flash-lite** for every role (pick others per run in the
-Arena / Duel). Full suite: `pytest -q` → **170 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
+Arena / Duel). Full suite: `pytest -q` → **176 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
 tests included).
 
 ## Status
@@ -43,6 +43,19 @@ tests included).
 | R6 | Verdict reveal, forecast, Replay page | ✅ | `show.mjs` swing + scalp (countdown → ✅/❌); `web/e2e/replay.mjs 10`: `/p/10` renders; "▶ Replay the show" ends in the verdict |
 | R7 | Duel, Hall of Fame, Auto-Scalp card, share card | ✅ | `web/e2e/r7.mjs`: Hall of Fame on the real DB, 1080×1350 share PNG, mock duel → head-to-head |
 | R8 | Real-run verification + polish | ✅ | 5 real runs through the production build in headless Chrome (table below), every agent present; reduced motion (no drumroll / typewriter / confetti) vs normal (all three); 390 px with no horizontal scroll (`web/e2e/mobile.mjs`); `scripts\dev.ps1` brings up both servers; screenshots in `docs/`. CLI and Streamlit unchanged |
+
+## GitHub readiness (2026-11-20, not pushed)
+
+- **Secrets scan** of the working tree and all commits (every blob on every ref, commit messages, plus the
+  *exact* key values from the local `.env`): no Gemini, Anthropic or FRED key anywhere; `.env`, `data/*.db`
+  and `logs/` were never committed; no stashes or unreachable objects. Note: the Gemini key in `.env` uses the
+  newer `AQ.`-prefixed format, which an `AIza…` pattern alone would miss.
+- **Private IP** `localhost` (LM Studio host) was in `scripts/test_lmstudio.py`; the default is now
+  `LMSTUDIO_BASE_URL` or `localhost`. It remains in the history of commits `4fe9cb7` and `0c4e755` (see Known issues).
+- **Seeds**: `data/seeds.json` (#4, #9, #10–#17, 209 KB) + `core/seeds.py` / `scripts/seeds.py`; the API loads
+  them on startup into an empty DB, so a fresh clone runs mock mode and `/p/<id>` with no key.
+- `.gitignore` also covers `.env.*` (except the template), SQLite side files, e2e outputs, editor/OS files.
+  `LICENSE` (MIT) added.
 
 ## How to run
 
@@ -189,6 +202,10 @@ free for the first 5,000 queries a month.
   process tree on exit (killing only the reloader orphans its worker).
 
 ## Known issues
+
+- **Before pushing**: the LAN IP `localhost` is still in the history of `scripts/test_lmstudio.py`
+  (commits `4fe9cb7`, `0c4e755`), and every commit's author email is the account address. Neither is a secret,
+  but both become public on push. Options are listed in the GitHub-readiness report.
 
 - **flash-lite schema slips**: in the R8 runs, Business and Technical sometimes returned JSON missing required
   fields (`4 validation errors for AgentOutput`). The in-conversation fix-up recovered every case (all agents

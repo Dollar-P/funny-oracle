@@ -3,7 +3,7 @@
 Five AI analysts argue about whether a stock, a coin or gold goes up or down — then a Monte Carlo
 simulation turns their verdict into a price range, and a scoreboard checks them against a coin flip.
 
-> **For education and fun. Not investment advice.**
+> **For education and fun. Not investment advice.** See [Disclaimer](#disclaimer).
 
 - **Agentic:** each analyst (Business, Technical, Valuation, Macro, Psychology) decides which market-data
   tools to call through an MCP server (`market-data-mcp`), up to 8 tool turns.
@@ -57,12 +57,29 @@ The original Streamlit app is still supported as a fallback:
 
 ## Setup (Windows / PowerShell)
 
+Requirements: **Python 3.14** and **Node.js** (LTS is fine; only for the web UI). Developed on Windows; the
+commands below are PowerShell.
+
 ```powershell
+git clone <this repo>; cd funny-price-prediction-project
 py -3.14 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-copy .env.example .env      # then fill in GEMINI_API_KEY (FRED_API_KEY optional)
-cd web; npm install; cd ..  # web UI only; needs Node.js (LTS is fine)
+copy .env.example .env      # for real runs fill in GEMINI_API_KEY (FRED_API_KEY optional); mock mode needs no key
+cd web; npm install; cd ..  # web UI
 ```
+
+### Quick start without an API key
+
+`data/oracle.db` is not in the repo, so a fresh clone starts with an empty database. The repo ships **10 real
+stored predictions** in `data/seeds.json` (NVDA / BTC-USD / GOLD swing 1M on two models, the NVDA duel, and two
+evaluated BTC 15m scalps). The web API loads them automatically the first time it starts on an empty database
+(or run `.venv\Scripts\python scripts\seeds.py load`). Then:
+
+```powershell
+scripts\dev.ps1            # mock mode: open http://localhost:5173, press START THE SHOW (฿0, no key)
+```
+
+and open e.g. `http://localhost:5173/p/10` (NVDA), `/p/4` (BTC scalp with its real result), or the Hall of Fame.
 
 **Models.** The default is **gemini-3.5-flash-lite** for every role (`ANALYST_MODEL`, `JUDGE_MODEL`,
 `SCALP_MODEL` in `.env`). It's the cheapest, it's fast, and in practice it's good enough. In the Arena and Duel
@@ -119,7 +136,7 @@ safety net, set a budget alert in Google Cloud Billing too.
 ## Use the MCP server from Claude Code
 
 ```powershell
-claude mcp add market-data -- D:\funny-price-prediction-project\.venv\Scripts\python.exe D:\funny-price-prediction-project\mcp_server\server.py
+claude mcp add market-data -- <repo>\.venv\Scripts\python.exe <repo>\mcp_server\server.py    # <repo> = absolute path of your clone
 ```
 
 Then ask Claude Code e.g. *"call get_indicators for BTC-USD on 1h"*.
@@ -168,3 +185,15 @@ node e2e\mobile.mjs http://localhost:5173 <outDir> 10              # 390 px: no 
 Start Auto-Scalp (Hall of Fame, or `scripts\auto_scalp.py`) at least an hour beforehand so there are
 evaluated predictions. No network or budget on the day? Run in mock mode, or open `/p/<id>` →
 **▶ Replay the show**.
+
+## Disclaimer
+
+Funny Oracle is an educational toy. **Nothing it shows is investment advice.** The "analysts" are language models
+that can be wrong, outdated or confidently mistaken; the price ranges come from a simple simulation; and the
+Hall of Fame exists precisely to show how often the whole thing is no better than a coin flip. Do not trade on it.
+Market data comes from free public sources (yfinance, FRED, alternative.me, CoinGecko) under their own terms.
+
+## License
+
+[MIT](LICENSE). Fonts (Lilita One, Inter, JetBrains Mono) are OFL; charts use TradingView Lightweight Charts™
+(Apache-2.0, attribution shown on every chart).

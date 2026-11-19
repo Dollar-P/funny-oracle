@@ -9,3 +9,21 @@ logs/
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+# local env variants (keep the template)
+.env.*
+!.env.example
+# SQLite side files
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+# browser-check outputs (web/e2e/*.mjs write screenshots/PNGs to the outDir you pass)
+web/e2e/out*/
+web/e2e/*.png
+web/test-results/
+web/playwright-report/
+e2e-out/
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

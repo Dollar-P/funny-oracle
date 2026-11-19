@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,13 +23,32 @@ from api.routes import market, models, runs, scoreboard  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
-app = FastAPI(title="Funny Oracle API", version="1.0",
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _seed_fresh_db()
+    yield
+
+
+app = FastAPI(title="Funny Oracle API", version="1.0", lifespan=lifespan,
               description="Oracle Arena backend. For fun — not investment advice.")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
 for r in (models.router, market.router, runs.router, scoreboard.router):
     app.include_router(r, prefix="/api")
+
+
+def _seed_fresh_db() -> None:
+    """Fresh clone (empty DB): load data/seeds.json so mock mode and /p/<id> replays work right away."""
+    from core import seeds
+
+    try:
+        r = seeds.load_if_empty()
+    except Exception as e:  # a broken seed file must not stop the API
+        logging.getLogger("api").warning("could not load seed predictions: %s", e)
+        return
+    if r:
+        logging.getLogger("api").warning("empty database: loaded %d demo seed predictions %s", len(r["loaded"]), r["loaded"])
 
 
 @app.get("/api/health")

@@ -5,7 +5,7 @@ test_lmstudio.py — ทดสอบว่า local LLM บน LM Studio ใช�
 
     .venv\\Scripts\\python scripts\\test_lmstudio.py
     .venv\\Scripts\\python scripts\\test_lmstudio.py --model prism-ml/bonsai-27b
-    .venv\\Scripts\\python scripts\\test_lmstudio.py --base-url http://localhost:1234/v1 --skip-concurrency
+    .venv\\Scripts\\python scripts\\test_lmstudio.py --base-url http://<lm-studio-host>:1234/v1 --skip-concurrency
 
 ทดสอบ 5 อย่าง (ตรงกับสิ่งที่ agent ในโปรเจกต์ต้องใช้):
   1. models       — เชื่อมต่อได้ไหม มีโมเดลอะไรโหลดอยู่
@@ -19,12 +19,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import time
 
 import httpx
 
-DEFAULT_BASE = "http://localhost:1234/v1"
+# LM Studio server; set LMSTUDIO_BASE_URL (or pass --base-url) for a server on another machine
+DEFAULT_BASE = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
 TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 
 AGENT_REPORT_SCHEMA = {
