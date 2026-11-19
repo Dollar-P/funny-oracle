@@ -4,7 +4,7 @@
 |---|---|---|---|
 | 1 | Project setup, venv, `.env` | ✅ done | `python -c "import yfinance, google.genai, mcp"` |
 | 2 | `mcp_server` + `data_sources` + `indicators` | ✅ done | `pytest tests/test_mcp_tools.py` (25 passed, live data) |
-| 3 | Register MCP in Claude Code | ⏳ | |
+| 3 | Register MCP in Claude Code | ✅ done | `claude mcp add market-data` (status ✔ Connected) + `pytest tests/test_mcp_client.py` (stdio + in-process) |
 | 4 | `llm.py` + `mcp_client.py` + agent loop + `cost.py` | ⏳ | |
 | 5 | Remaining agents + News Researcher | ⏳ | |
 | 6 | Debate + Judge + Monte Carlo + orchestrator | ⏳ | |
@@ -24,3 +24,5 @@
 ## Known issues
 
 - (none yet)
+- **Checkpoint 3 verification**: instead of waiting for Claude Code to reconnect, `tests/test_mcp_client.py` spawns the same command Claude Code uses and calls `get_indicators("BTC-USD","1h")` via `core/mcp_client.py` (mcp 2.x `mcp.Client` with `StdioServerParameters`). Registration is in local scope (`~/.claude.json`, project-private).
+- **stdout hygiene**: server logs to stderr only; mcp 2.x also diverts fd 1 while serving.

@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import sys
 from pathlib import Path
+
+# stdio transport: stdout carries JSON-RPC only. All logging goes to stderr.
+# (mcp 2.x additionally diverts fd 1 to stderr while serving, so stray print()s
+#  from libraries like yfinance cannot corrupt the protocol stream.)
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
