@@ -214,7 +214,10 @@ async def get_prediction(pid: int, evaluate: bool = False):
             except Exception:  # network trouble: the client simply retries later
                 pass
     with connect() as conn:
-        row = conn.execute("SELECT actual_price, evaluated_at, source FROM predictions WHERE id = ?", (pid,)).fetchone()
+        row = conn.execute("SELECT actual_price, evaluated_at, source, analyst_model, judge_model FROM predictions"
+                           " WHERE id = ?", (pid,)).fetchone()
+    if not p.models and row["analyst_model"]:  # saved before R1: models backfilled from llm_usage
+        p.models = {"analyst": row["analyst_model"], "judge": row["judge_model"] or row["analyst_model"]}
     return {"prediction": json.loads(p.model_dump_json()), "actual_price": row["actual_price"],
             "evaluated_at": row["evaluated_at"], "source": row["source"]}
 

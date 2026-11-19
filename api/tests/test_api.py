@@ -165,6 +165,7 @@ def test_prediction_history_and_detail(client, api_db):
     assert nv and all(r["ticker"] == "NVDA" for r in nv)
     d = client.get(f"/api/predictions/{api_db['ids'][0]}").json()
     assert d["prediction"]["verdict"]["headline"] and "actual_price" in d
+    assert d["prediction"]["models"]["analyst"] == "gemini-3.5-flash-lite"
     assert client.get("/api/predictions/999999").status_code == 404
 
 

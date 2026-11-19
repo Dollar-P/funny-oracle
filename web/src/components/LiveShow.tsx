@@ -12,6 +12,7 @@ import TugOfWar from "./TugOfWar";
 import DebateThread from "./DebateThread";
 import TickerTape from "./TickerTape";
 import VerdictSection from "./VerdictSection";
+import ShareButton from "./ShareButton";
 import { shortModel, thb } from "../lib/format";
 import { displayTicker } from "../lib/ticker";
 import { sfx } from "../lib/sound";
@@ -178,7 +179,7 @@ export default function LiveShow({ runId, onNewShow }: { runId: string; onNewSho
           onAllShown={() => setDebateShown(true)}
         />
       )}
-      {verdictReady && <VerdictSection s={s} runId={runId} actions={s.status === "done" ? <ShowActions s={s} onRunAgain={runAgain} /> : undefined} />}
+      {verdictReady && <VerdictSection s={s} runId={runId} actions={s.status === "done" ? <ShowActions s={s} onRunAgain={runAgain} extra={s.prediction ? <ShareButton prediction={s.prediction} /> : null} /> : undefined} />}
       <TickerTape items={s.tape} />
     </div>
   );
