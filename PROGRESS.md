@@ -7,7 +7,7 @@
 | 3 | Register MCP in Claude Code | ✅ done | `claude mcp add market-data` (✔ Connected) + `pytest tests/test_mcp_client.py` |
 | 4 | `llm.py` + `mcp_client.py` + agent loop + `cost.py` | ✅ done | `python scripts/run_agents.py BTC-USD --agents technical` → valid AgentReport, $0.0029 logged in `llm_usage`; `pytest tests/test_llm.py` (mocked) |
 | 5 | Remaining agents + News Researcher | ✅ done | `python scripts/run_agents.py <T> --agents all` for NVDA, BTC-USD, GC=F → 15/15 valid reports; News Researcher (search + get_news modes) covered by mocks |
-| 6 | Debate + Judge + Monte Carlo + orchestrator | ⏳ | |
+| 6 | Debate + Judge + Monte Carlo + orchestrator | ✅ done | `python orchestrator.py NVDA swing 1M` → P10 134.85 / P50 155.51 / P90 178.89 (11 s, $0.0137); also `BTC-USD scalp 15m`; `pytest tests/test_montecarlo.py tests/test_orchestrator.py` |
 | 7 | Streamlit UI | ⏳ | |
 | 8 | Scoreboard + Auto-Scalp | ⏳ | |
 | 9 | README + demo rehearsal | ⏳ | |
@@ -20,6 +20,8 @@
 | – | capability probes (search+functions) | gemini-3.5-flash-lite | <$0.0001 |
 | 2–4 | CP5: all 5 agents × NVDA / BTC-USD / GC=F (swing 1M) | gemini-3.5-flash-lite | $0.0089 / $0.0096 / $0.0083 (+ uncounted searches, see Known issues) |
 | – | one debug search call to inspect server-side tool parts | gemini-3.5-flash-lite | $0.0141 |
+| 5 | CP6: `orchestrator.py NVDA swing 1M` (prediction #1) | gemini-3.5-flash-lite | $0.0137 |
+| 6 | CP6: `orchestrator.py BTC-USD scalp 15m` (prediction #2) | gemini-3.5-flash-lite | $0.0075 |
 
 ## Decisions
 
@@ -38,6 +40,14 @@
 - **`llm_usage.run_id`** (extra column vs §4.8): usage rows are written during a run, before the prediction row exists; `run_id` links them, and `prediction_id` is filled in on save.
 - **Budget guard**: before a prediction, `spent + estimate > BUDGET_THB` → refuse. Estimate = avg of last 10 predictions of the mode × 1.25 (default $0.20 swing / $0.05 scalp). Also checked before every single LLM call.
 - **Claude provider** (`LLM_PROVIDER=claude`): implemented with the `anthropic` SDK (manual loop, server `web_search`, `output_config.effort`), model IDs from `CLAUDE_*_MODEL` in `.env`. Only covered by mocks — never called for real.
+
+- **Debate**: Bull and Bear run in parallel on the same reports (one round), so each rebuts the opponent's *strongest likely* point rather than the opponent's actual text. Cheaper and faster; same number of LLM calls.
+- **Scalp mode**: analysts = Technical, Macro ("macro-lite" = same agent with max 3 tool turns), Psychology; no web search, no News Researcher, no debate; Judge still runs (~4 LLM calls).
+- **Judge** gets each analyst's tool trace (tool names + errors) so it can discount unbacked claims; adjustment clipped to ±0.2 in code regardless of model output.
+- **Agent timeout** 45 s (`AGENT_TIMEOUT_S`) → agent marked absent, weights renormalized. If every analyst fails, S=0 and the judge is skipped.
+- **Monte Carlo**: log-normal increments N(μ_adj, σ) without the −σ²/2 term, so S=0 ⇒ median = today's price and P(up) ≈ 50%. Steps: stocks/gold 5/21/63 trading days, crypto 7/30/91 days; scalp 15×1m, 12×5m, 16×15m. σ from 1y daily (swing) or 5d of the scalp interval.
+- **Predicted direction** for the hit rate = `prob_up > 0.5`; predictions with exactly 0.5 are excluded from the hit rate. Agent leaderboard uses sign(score), skipping 0 scores.
+- **Prediction storage**: the full `Prediction` JSON is stored in `predictions.prediction_json` so the UI can replay past runs without API calls (demo "replay mode").
 
 ## Known issues
 
