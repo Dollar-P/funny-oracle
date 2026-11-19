@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import config
 from agents.base import Context, load_prompt, render
-from agents.debate import reports_digest
+from agents.debate import reports_digest, transcript
 from core.llm import LLM
 from core.schemas import AgentReport, DebateArgument, Verdict
 
@@ -18,8 +18,8 @@ class Judge:
                         horizon=ctx.horizon, s_raw=f"{s_raw:+.3f}")
         parts = ["Analyst reports (with tool trace):", reports_digest(reports, with_trace=True)]
         if debate:
-            parts.append("\nDebate:")
-            parts += [f"[{d.side.upper()}] {d.argument}" for d in debate]
+            parts.append("\nDebate (Bull opens → Bear rebuts → Bull replies):")
+            parts.append(transcript(debate))
         else:
             parts.append("\n(No debate in this mode.)")
         res = await self.llm.run_agent(agent="judge", system=system, user="\n".join(parts), schema=Verdict,

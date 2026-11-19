@@ -48,6 +48,8 @@ def test_predict_renders_every_section(fresh_db, fake_pipeline):
                    "P(up)", "Confidence", "Agent scores", "Debate", "Tool-call trace", "Sources"]:
         assert needle in t, needle
     assert len(at.get("plotly_chart")) >= 2
+    chat = at.get("chat_message")
+    assert [c.proto.name for c in chat] == ["Bull", "Bear", "Bull"]
     for agent in config.AGENTS:
         assert f"**{agent.title()}**" in t
 
@@ -65,4 +67,25 @@ def test_scoreboard_tab_and_replay(fresh_db, fake_pipeline):
     next(b for b in at.button if b.label == "Load").click().run()
     assert not at.exception
     assert "BTC-USD · Scalp · 15m" in _texts(at)
+    # sidebar follows the replayed prediction
+    assert at.text_input(key="ticker").value == "BTC-USD"
+    assert at.radio(key="mode").value == "scalp"
+    assert at.selectbox(key="horizon").value == "15m"
     assert "Evaluated / pending" in _texts(at)
+
+
+def test_replay_query_param_syncs_sidebar(fresh_db, fake_pipeline):
+    import anyio
+
+    import orchestrator
+
+    p = anyio.run(lambda: orchestrator.run_prediction("GC=F", "swing", "3M"))
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.query_params["replay"] = str(p.id)
+    at.run()
+    assert not at.exception
+    assert at.text_input(key="ticker").value == "GC=F"
+    assert at.radio(key="mode").value == "swing" and at.selectbox(key="horizon").value == "3M"
+    # switching mode afterwards still works (horizon falls back to a valid option)
+    at.radio(key="mode").set_value("scalp").run()
+    assert not at.exception and at.selectbox(key="horizon").value == "15m"

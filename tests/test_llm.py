@@ -67,15 +67,39 @@ def test_tools_not_allowed_are_refused(fresh_db):
     assert rep.trace[0].error == "not allowed"
 
 
-def test_invalid_json_triggers_one_format_retry(fresh_db):
-    fake = FakeGemini([text_response("I think it goes up."), text_response(AGENT_JSON)])
+def test_invalid_json_is_fixed_in_same_conversation(fresh_db):
+    fake = FakeGemini([fn_call_response(("get_indicators", {"ticker": "BTC-USD"})),
+                       text_response("I think it goes up because rsi_zone=oversold."), text_response(AGENT_JSON)])
     rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
-    assert rep.ok
-    assert fake.requests[1]["config"].response_mime_type == "application/json"
+    assert rep.ok and len(fake.requests) == 3
+    fix = fake.requests[2]
+    # same conversation (tool results still there), tools disabled, not a context-free JSON-mode call
+    assert any(p.function_response for c in fix["contents"] for p in (c.parts or []))
+    assert "could not be parsed" in fix["contents"][-1].parts[0].text
+    assert fix["config"].tool_config.function_calling_config.mode == "NONE"
+    assert fix["config"].response_mime_type is None
 
 
-def test_invalid_json_twice_marks_agent_failed(fresh_db):
-    fake = FakeGemini([text_response("nope"), text_response("still nope")])
+def test_json_mode_conversion_is_last_resort(fresh_db):
+    long_text = "Technical view: rsi_zone=oversold (RSI 22), trend_vs_sma200=below, momentum fading."
+    fake = FakeGemini([text_response(long_text), text_response("still not json " + long_text),
+                       text_response(AGENT_JSON)])
+    rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
+    assert rep.ok and len(fake.requests) == 3
+    assert fake.requests[2]["config"].response_mime_type == "application/json"
+    assert "rsi_zone=oversold" in fake.requests[2]["contents"][0].parts[0].text
+
+
+def test_empty_output_is_not_invented(fresh_db):
+    fake = FakeGemini([text_response(""), text_response("nope")])
+    rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
+    assert not rep.ok and "no usable output" in rep.error
+    assert len(fake.requests) == 2  # no context-free conversion call on empty text
+
+
+def test_invalid_json_three_times_marks_agent_failed(fresh_db):
+    junk = "this is definitely not json but it is long enough to try converting it"
+    fake = FakeGemini([text_response(junk), text_response(junk), text_response(junk)])
     rep = run(TechnicalAgent(LLM("gemini", client=fake), MODEL, FakeExecutor()).run(ctx()))
     assert not rep.ok and "invalid JSON" in rep.error
 

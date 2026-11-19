@@ -197,3 +197,55 @@ def test_stdio_server_lists_and_calls_tools():
                 assert payload["data"]["rsi14"] is not None
 
     anyio.run(run)
+
+
+def test_compute_all_has_signal_labels():
+    from mcp_server import indicators as ind
+
+    d = ind.compute_all(_synthetic())
+    sig = d["signals"]
+    for k in ("price_vs_bollinger", "rsi_zone", "macd_cross", "macd_momentum", "trend_vs_sma50",
+              "trend_vs_sma200", "sma_regime", "volume_state", "volatility_state"):
+        assert k in sig, k
+    # labels must agree with the raw numbers they summarise
+    assert sig["trend_vs_sma50"] == ("above" if d["last"] > d["sma"]["sma50"] else "below")
+    assert sig["rsi_zone"] == ind.label_rsi(d["rsi14"])
+    assert sig["price_vs_bollinger"] == ind.label_bollinger(d["bollinger"]["pct_b"])
+
+
+@pytest.mark.parametrize("pct_b,label", [(1.2, "above_upper_band"), (0.9, "near_upper_band"), (0.5, "mid_band"),
+                                         (0.1, "near_lower_band"), (-0.3, "below_lower_band"), (None, "n/a")])
+def test_label_bollinger(pct_b, label):
+    from mcp_server.indicators import label_bollinger
+
+    assert label_bollinger(pct_b) == label
+
+
+@pytest.mark.parametrize("v,label", [(80, "overbought"), (70, "overbought"), (60, "bullish"), (50, "neutral"),
+                                     (40, "bearish"), (30, "oversold"), (12, "oversold")])
+def test_label_rsi(v, label):
+    from mcp_server.indicators import label_rsi
+
+    assert label_rsi(v) == label
+
+
+def test_label_macd_cross_and_momentum():
+    from mcp_server.indicators import label_macd
+
+    assert label_macd(pd.Series([-2, -1, 0.5, 1.0])) == {
+        "macd_cross": "bullish_cross", "macd_cross_bars_ago": 1, "macd_momentum": "bullish_strengthening"}
+    assert label_macd(pd.Series([2, 1, -0.5]))["macd_cross"] == "bearish_cross"
+    old = label_macd(pd.Series([-1, 1, 2, 3, 2.5]))  # cross 3 bars ago is outside the default lookback of 3
+    assert old["macd_cross"] == "none" and old["macd_momentum"] == "bullish_fading"
+    assert label_macd(pd.Series([-1.0, -2.0]))["macd_momentum"] == "bearish_strengthening"
+
+
+def test_label_volume_vs_volatility():
+    from mcp_server.indicators import label_volatility, label_volume, label_vs
+
+    assert [label_volume(z) for z in (2.5, 1.2, 0, -1.5, None)] == ["very_high", "high", "normal", "low", "n/a"]
+    assert label_vs(10, 9) == "above" and label_vs(8, 9) == "below" and label_vs(8, None) == "n/a"
+    flat = pd.Series([2.0] * 50)
+    assert label_volatility(flat) == "normal"
+    assert label_volatility(pd.concat([flat, pd.Series([4.0])], ignore_index=True)) == "elevated"
+    assert label_volatility(pd.concat([flat, pd.Series([1.0])], ignore_index=True)) == "compressed"

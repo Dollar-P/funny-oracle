@@ -112,6 +112,19 @@ FINAL_NUDGE = (
 )
 
 
+FORMAT_SYSTEM = (
+    "Convert the analysis into JSON that matches the schema exactly. Copy every number, label and claim "
+    "from the text; do not invent anything. If the text contains no concrete analysis, set confidence to 0 "
+    "and say so in reasoning."
+)
+
+
+def fix_json_prompt(err: Exception) -> str:
+    return (f"Your last reply could not be parsed as the required JSON ({str(err)[:200]}). "
+            "Reply again with ONLY the JSON object — no prose, no code fence — keeping every number and label "
+            "from your analysis. Do not call any more tools.")
+
+
 def _schema_hint(schema: type[BaseModel]) -> str:
     return (
         "\n\nWhen you are done, reply with ONLY a JSON object (no prose, no code fence) matching this JSON schema:\n"
@@ -344,22 +357,32 @@ class GeminiBackend:
         try:
             output = parse_output(text, schema)
         except (ValueError, ValidationError) as e:
-            log.info("agent %s: output not valid JSON (%s); running format call", agent, e)
-            fcfg = types.GenerateContentConfig(
-                system_instruction="Convert the analysis into JSON that matches the schema exactly. "
-                                   "Keep every number and claim; do not invent new ones.",
-                response_mime_type="application/json",
-                response_json_schema=strict_schema(schema),
-                thinking_config=self._thinking("low"),
-            )
-            resp, u, c = await self._generate(
-                model, [types.Content(role="user", parts=[types.Part(text=text or "(no analysis text)")])],
-                fcfg, agent)
+            log.warning("agent %s: output not valid JSON (%s); asking it to fix in-conversation. text=%r",
+                        agent, str(e)[:200], text[:600])
+            # 1) same conversation: the model still has its tool results, so it can't drift into filler
+            contents.append(types.Content(role="user", parts=[types.Part(text=fix_json_prompt(e))]))
+            resp, u, c = await self._generate(model, contents, cfg(final=True), agent)
             total, spent = total + u, spent + c
+            fixed = self._text(resp)
             try:
-                output = parse_output(self._text(resp), schema)
+                output = parse_output(fixed, schema)
             except (ValueError, ValidationError) as e2:
-                error = f"invalid JSON output after retry: {e2}"[:300]
+                # 2) last resort: JSON-mode conversion of the text alone — never on empty text
+                source_text = fixed if len(fixed) > len(text) else text
+                if len(source_text.strip()) < 40:
+                    error = f"no usable output after JSON fix-up: {e2}"[:300]
+                else:
+                    log.warning("agent %s: fix-up still invalid; JSON-mode conversion", agent)
+                    fcfg = types.GenerateContentConfig(
+                        system_instruction=FORMAT_SYSTEM, response_mime_type="application/json",
+                        response_json_schema=strict_schema(schema), thinking_config=self._thinking("low"))
+                    resp, u, c = await self._generate(
+                        model, [types.Content(role="user", parts=[types.Part(text=source_text)])], fcfg, agent)
+                    total, spent = total + u, spent + c
+                    try:
+                        output = parse_output(self._text(resp), schema)
+                    except (ValueError, ValidationError) as e3:
+                        error = f"invalid JSON output after retry: {e3}"[:300]
 
         return AgentResult(output=output, text=text, trace=trace, sources=list(dict.fromkeys(sources)),
                            usage=total, cost_usd=spent, error=error, searched=searched)
@@ -471,18 +494,35 @@ class ClaudeBackend:
         output, error = None, None
         try:
             output = parse_output(text, schema)
-        except (ValueError, ValidationError):
-            resp, u, c = await self._create(
-                agent, model=model, max_tokens=4000,
-                system="Convert the analysis into JSON matching the schema. Keep every number; invent nothing.",
-                messages=[{"role": "user", "content": text or "(no analysis text)"}],
-                output_config={"effort": "low", "format": {"type": "json_schema", "schema": strict_schema(schema)}},
-            )
+        except (ValueError, ValidationError) as e:
+            log.warning("agent %s: output not valid JSON (%s); asking it to fix in-conversation. text=%r",
+                        agent, str(e)[:200], text[:600])
+            messages.append({"role": "user", "content": fix_json_prompt(e)})
+            kw = dict(model=model, max_tokens=16000, system=system, messages=messages,
+                      output_config={"effort": thinking or "low"})
+            if tools:
+                kw.update(tools=tools, tool_choice={"type": "none"})
+            resp, u, c = await self._create(agent, **kw)
             total, spent = total + u, spent + c
+            fixed = "".join(b.text for b in resp.content if b.type == "text")
             try:
-                output = parse_output("".join(b.text for b in resp.content if b.type == "text"), schema)
+                output = parse_output(fixed, schema)
             except (ValueError, ValidationError) as e2:
-                error = f"invalid JSON output after retry: {e2}"[:300]
+                source_text = fixed if len(fixed) > len(text) else text
+                if len(source_text.strip()) < 40:
+                    error = f"no usable output after JSON fix-up: {e2}"[:300]
+                else:
+                    resp, u, c = await self._create(
+                        agent, model=model, max_tokens=4000, system=FORMAT_SYSTEM,
+                        messages=[{"role": "user", "content": source_text}],
+                        output_config={"effort": "low",
+                                       "format": {"type": "json_schema", "schema": strict_schema(schema)}},
+                    )
+                    total, spent = total + u, spent + c
+                    try:
+                        output = parse_output("".join(b.text for b in resp.content if b.type == "text"), schema)
+                    except (ValueError, ValidationError) as e3:
+                        error = f"invalid JSON output after retry: {e3}"[:300]
 
         return AgentResult(output=output, text=text, trace=trace, sources=list(dict.fromkeys(sources)),
                            usage=total, cost_usd=spent, error=error, searched=searched)

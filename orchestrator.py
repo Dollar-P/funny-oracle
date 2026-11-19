@@ -141,7 +141,7 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
     debate, verdict = [], None
     if ok:
         if mode == "swing":                                                            # [5]
-            say("Bull vs Bear debate")
+            say("Bull vs Bear debate: Bull opens → Bear rebuts → Bull replies")
             debate = await run_debate(llm, models["judge"], ctx, reports, s_raw, config.ANALYST_THINKING)
         say("Judge deliberating")                                                       # [6]
         verdict, err = await Judge(llm, models["judge"]).run(ctx, reports, debate, s_raw)
@@ -189,7 +189,7 @@ def format_prediction(p: Prediction) -> str:
         lines.append(f"     {r.agent:<11} w={w:.2f} " + (f"{r.score:+.2f} ({r.confidence:.2f})  tools={len(r.trace)}"
                                                          if r.ok else f"⚠ absent: {r.error}"))
     for d in p.debate:
-        lines.append(f"   [{d.side.upper()}] {d.argument[:220]}{'…' if len(d.argument) > 220 else ''}")
+        lines.append(f"   [{d.side.upper()} {d.turn or ''}] {d.argument[:220]}{'…' if len(d.argument) > 220 else ''}")
     lines.append("   Not investment advice.")
     return "\n".join(lines)
 

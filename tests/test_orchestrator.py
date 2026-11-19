@@ -43,10 +43,15 @@ class RoleFake:
             return text_response(json.dumps({"adjustment": self.judge_adj, "final_confidence": 0.55,
                                              "headline": "Bulls win by a whisker", "summary": "Close call.",
                                              "key_risks": ["macro", "valuation"]}))
-        for side in ("BULL", "BEAR"):
-            if f"You are the {side}" in sys_:
-                return text_response(json.dumps({"side": side.lower(), "argument": f"{side} case",
-                                                 "strongest_opponent_point": "x"}))
+        if "You are the BULL giving the final" in sys_:
+            return text_response(json.dumps({"argument": "BULL reply " + "word " * 120,
+                                             "strongest_opponent_point": "bear point"}))
+        if "You are the BULL, opening" in sys_:
+            return text_response(json.dumps({"argument": "BULL opening case",
+                                             "strongest_opponent_point": "likely bear point"}))
+        if "You are the BEAR" in sys_:
+            return text_response(json.dumps({"argument": "BEAR rebuttal case",
+                                             "strongest_opponent_point": "bull opening point"}))
         if "news researcher" in sys_:
             return text_response(json.dumps({"bullets": ["News A"], "links": []}))
         role = next(a for a in SCORES if f"senior {a}" in sys_ or
@@ -89,7 +94,21 @@ def test_swing_pipeline_end_to_end(fresh_db, synthetic_prices):
     expected = sum(w[a] * s * 0.8 for a, s in SCORES.items()) / sum(w[a] * 0.8 for a in SCORES)
     assert p.s_raw == pytest.approx(expected)
     assert p.s_final == pytest.approx(expected + 0.15)
-    assert {d.side for d in p.debate} == {"bull", "bear"}
+    assert [(d.side, d.turn) for d in p.debate] == [("bull", "opening"), ("bear", "rebuttal"), ("bull", "reply")]
+    assert len(p.debate[2].argument.split()) <= 81  # 80 words + ellipsis
+    # Bear saw the Bull's opening; the Bull's reply saw the Bear's rebuttal; the Judge saw all three
+    def user_text(contents):
+        return " ".join(pt.text or "" for c in contents if c.role == "user" for pt in (c.parts or []))
+    by_role = {}
+    for _, contents, cfg in fake.requests:
+        si = (cfg.system_instruction or "") if cfg else ""
+        for key in ("BULL, opening", "BEAR", "BULL giving the final", "JUDGE"):
+            if key in si:
+                by_role[key] = user_text(contents)
+    assert "BULL opening case" not in by_role["BULL, opening"]
+    assert "BULL opening case" in by_role["BEAR"]
+    assert "BEAR rebuttal case" in by_role["BULL giving the final"]
+    assert all(t in by_role["JUDGE"] for t in ("BULL opening case", "BEAR rebuttal case", "BULL reply"))
     assert p.verdict.headline == "Bulls win by a whisker"
     assert p.forecast.p10 < p.forecast.p50 < p.forecast.p90
     assert p.cost_usd > 0
@@ -101,7 +120,7 @@ def test_swing_pipeline_end_to_end(fresh_db, synthetic_prices):
 
     with connect() as conn:
         n = conn.execute("SELECT COUNT(*) FROM llm_usage WHERE prediction_id = ?", (p.id,)).fetchone()[0]
-    assert n >= 5 + 5 + 2 + 1  # 2 turns × 5 analysts (≥), bull, bear, judge
+    assert n >= 5 + 5 + 3 + 1  # 2 turns × 5 analysts (≥), bull, bear, bull reply, judge
 
 
 def test_failed_agent_is_dropped_and_weights_renormalize(fresh_db, synthetic_prices):

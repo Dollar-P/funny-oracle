@@ -40,10 +40,21 @@ class NewsBrief(BaseModel):
     links: list[str] = Field(default_factory=list)
 
 
-class DebateArgument(BaseModel):
+class DebateOutput(BaseModel):
+    """What a debater LLM returns."""
+
+    argument: str = Field(description="the argument; respect the word limit in the instructions")
+    strongest_opponent_point: str = Field(description="the opponent point being rebutted, in one short sentence")
+
+
+DebateTurn = Literal["opening", "rebuttal", "reply"]
+
+
+class DebateArgument(DebateOutput):
+    """One turn of the sequential debate: Bull opens → Bear rebuts → Bull replies."""
+
     side: Literal["bull", "bear"]
-    argument: str = Field(description="<= 150 words, must rebut the opponent's strongest point")
-    strongest_opponent_point: str = Field(description="the opponent point being rebutted")
+    turn: DebateTurn | None = None  # None = stored before the debate became sequential
 
 
 class Verdict(BaseModel):

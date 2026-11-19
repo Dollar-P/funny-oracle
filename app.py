@@ -53,8 +53,23 @@ ss.setdefault("ticker", "NVDA")
 ss.setdefault("pred", None)
 ss.setdefault("auto", AutoScalpState())
 ss.setdefault("auto_on", False)
+ss.setdefault("mode", "swing")
+
+
+def sync_sidebar(p: Prediction | None) -> None:
+    """Point the sidebar widgets at a replayed prediction. Must run before the widgets are created."""
+    if p is None:
+        return
+    ss.ticker, ss.mode, ss.horizon = p.ticker, p.mode, p.horizon
+    ss.preset = None
+    ss["_last_preset"] = None
+
+
+if "_replay_sync" in ss:  # set by the Load button on the previous run
+    sync_sidebar(ss.pop("_replay_sync"))
 if ss.pred is None and st.query_params.get("replay", "").isdigit():  # demo link: ?replay=<prediction id>
     ss.pred = scoreboard.load(int(st.query_params["replay"]))
+    sync_sidebar(ss.pred)
 
 
 def run_async(coro):
@@ -69,10 +84,12 @@ with st.sidebar:
         ss.ticker = PRESETS[preset]
     ss["_last_preset"] = preset
     ticker = normalize(st.text_input("Ticker", key="ticker"))
-    mode = st.radio("Mode", ["swing", "scalp"], horizontal=True,
+    mode = st.radio("Mode", ["swing", "scalp"], horizontal=True, key="mode",
                     format_func=lambda m: "Swing (1W–3M)" if m == "swing" else "Scalp (15m–4h)")
     horizons = list(config.HORIZONS[mode])
-    horizon = st.selectbox("Horizon", horizons, index=1 if mode == "swing" else 0)
+    if ss.get("horizon") not in horizons:  # first run, or the mode just changed
+        ss.horizon = horizons[1] if mode == "swing" else horizons[0]
+    horizon = st.selectbox("Horizon", horizons, key="horizon")
     providers = ["gemini"] + (["claude"] if config.CLAUDE_ANALYST_MODEL else [])
     provider = st.selectbox("LLM", providers, index=providers.index(config.LLM_PROVIDER)
                             if config.LLM_PROVIDER in providers else 0)
@@ -97,6 +114,8 @@ with st.sidebar:
                             format_func=lambda i: "—" if i is None else opts[i])
         if pick is not None and st.button("Load", width="stretch"):
             ss.pred = scoreboard.load(pick)
+            ss["_replay_sync"] = ss.pred
+            st.rerun()  # widgets above are already drawn; sync them on the next run
     st.warning("⚠ For education and fun. **Not investment advice.**")
 
 # --- run a prediction -------------------------------------------------------------------
@@ -227,10 +246,15 @@ def render_prediction(p: Prediction):
 
     with st.expander("🐂 vs 🐻 Debate & Judge", expanded=bool(p.debate)):
         if p.debate:
-            dc = st.columns(2)
-            for col, d in zip(dc, sorted(p.debate, key=lambda d: d.side != "bull")):
-                col.markdown(f"**{'🐂 Bull' if d.side == 'bull' else '🐻 Bear'}**")
-                col.write(d.argument)
+            turns = p.debate if all(d.turn for d in p.debate) else sorted(p.debate, key=lambda d: d.side != "bull")
+            labels = {"opening": "opens", "rebuttal": "rebuts", "reply": "replies"}
+            for d in turns:
+                name = "Bull" if d.side == "bull" else "Bear"
+                with st.chat_message(name, avatar="🐂" if d.side == "bull" else "🐻"):
+                    st.markdown(f"**{name}** {labels.get(d.turn or '', '')}")
+                    if d.turn in ("rebuttal", "reply") and d.strongest_opponent_point:
+                        st.caption(f"↩ responding to: {d.strongest_opponent_point}")
+                    st.write(d.argument)
         else:
             st.caption("No debate in scalp mode.")
         if p.verdict:

@@ -77,7 +77,6 @@ def compute_all(df: pd.DataFrame) -> dict:
 
     r = rsi(close)
     m = macd(close).iloc[-1]
-    m_prev = macd(close).iloc[-2]
     bb = bollinger(close).iloc[-1]
     a = atr(df).iloc[-1]
     vz = volume_zscore(df["Volume"]).iloc[-1] if df["Volume"].sum() > 0 else None
@@ -85,33 +84,127 @@ def compute_all(df: pd.DataFrame) -> dict:
     sma = {p: close.rolling(p).mean().iloc[-1] if len(close) >= p else None for p in (20, 50, 200)}
     ema = {p: close.ewm(span=p, adjust=False).mean().iloc[-1] for p in (12, 26)}
 
-    def above(v):
-        return None if v is None or pd.isna(v) else bool(last > v)
-
-    trend = "n/a"
-    if sma[50] is not None and sma[200] is not None:
-        trend = "golden_cross_regime" if sma[50] > sma[200] else "death_cross_regime"
-
-    cross = None
-    if m_prev["hist"] <= 0 < m["hist"]:
-        cross = "bullish_cross"
-    elif m_prev["hist"] >= 0 > m["hist"]:
-        cross = "bearish_cross"
-
+    hist = macd(close)["hist"]
+    atr_pct_series = atr(df) / close * 100
+    levels = support_resistance(df)
     rsi_v = r.iloc[-1]
+    signals = {
+        "price_vs_bollinger": label_bollinger(bb["pct_b"]),
+        "rsi_zone": label_rsi(rsi_v),
+        **label_macd(hist),
+        "trend_vs_sma20": label_vs(last, sma[20]),
+        "trend_vs_sma50": label_vs(last, sma[50]),
+        "trend_vs_sma200": label_vs(last, sma[200]),
+        "sma_regime": label_regime(sma[50], sma[200]),
+        "volume_state": label_volume(vz),
+        "volatility_state": label_volatility(atr_pct_series),
+    }
     return {
         "last": _r(last),
+        # Deterministic labels computed in code — agents should quote these rather than re-derive them.
+        "signals": signals,
         "rsi14": _r(rsi_v, 1),
-        "rsi_state": None if pd.isna(rsi_v) else ("overbought" if rsi_v > 70 else "oversold" if rsi_v < 30 else "neutral"),
-        "macd": {"line": _r(m["macd"]), "signal": _r(m["signal"]), "hist": _r(m["hist"]), "event": cross},
+        "macd": {"line": _r(m["macd"]), "signal": _r(m["signal"]), "hist": _r(m["hist"])},
         "sma": {f"sma{p}": _r(v) for p, v in sma.items()},
-        "price_above_sma": {f"sma{p}": above(v) for p, v in sma.items()},
+        "pct_vs_sma": {f"sma{p}": _r((last / v - 1) * 100, 2) if v else None for p, v in sma.items()},
         "ema": {f"ema{p}": _r(v) for p, v in ema.items()},
-        "sma_regime": trend,
         "bollinger": {"upper": _r(bb["upper"]), "mid": _r(bb["mid"]), "lower": _r(bb["lower"]), "pct_b": _r(bb["pct_b"], 2)},
         "atr14": _r(a),
         "atr_pct": _r(a / last * 100, 2),
         "volume_z20": _r(vz, 2),
-        "levels": {k: [_r(x) for x in v] for k, v in support_resistance(df).items()},
+        "levels": {k: [_r(x) for x in v] for k, v in levels.items()},
+        "pct_to_nearest": {"support": _r((levels["support"][0] / last - 1) * 100, 2),
+                           "resistance": _r((levels["resistance"][0] / last - 1) * 100, 2)},
         "bars_used": len(df),
     }
+
+
+# --- deterministic signal labels ----------------------------------------------------------
+
+def _missing(x) -> bool:
+    return x is None or pd.isna(x)
+
+
+def label_bollinger(pct_b) -> str:
+    """%B: 0 = lower band, 1 = upper band."""
+    if _missing(pct_b):
+        return "n/a"
+    if pct_b > 1:
+        return "above_upper_band"
+    if pct_b >= 0.8:
+        return "near_upper_band"
+    if pct_b > 0.2:
+        return "mid_band"
+    if pct_b >= 0:
+        return "near_lower_band"
+    return "below_lower_band"
+
+
+def label_rsi(v) -> str:
+    if _missing(v):
+        return "n/a"
+    if v >= 70:
+        return "overbought"
+    if v >= 55:
+        return "bullish"
+    if v > 45:
+        return "neutral"
+    if v > 30:
+        return "bearish"
+    return "oversold"
+
+
+def label_macd(hist: pd.Series, lookback: int = 3) -> dict:
+    """macd_cross within the last `lookback` bars + momentum of the histogram."""
+    h = hist.dropna()
+    out = {"macd_cross": "none", "macd_cross_bars_ago": None, "macd_momentum": "n/a"}
+    if len(h) < 2:
+        return out
+    for ago in range(0, min(lookback, len(h) - 1)):
+        cur, prev = h.iloc[-1 - ago], h.iloc[-2 - ago]
+        if prev <= 0 < cur:
+            out.update(macd_cross="bullish_cross", macd_cross_bars_ago=ago)
+            break
+        if prev >= 0 > cur:
+            out.update(macd_cross="bearish_cross", macd_cross_bars_ago=ago)
+            break
+    cur, prev = h.iloc[-1], h.iloc[-2]
+    if cur > 0:
+        out["macd_momentum"] = "bullish_strengthening" if cur > prev else "bullish_fading"
+    elif cur < 0:
+        out["macd_momentum"] = "bearish_strengthening" if cur < prev else "bearish_fading"
+    else:
+        out["macd_momentum"] = "flat"
+    return out
+
+
+def label_vs(price: float, ma) -> str:
+    if _missing(ma):
+        return "n/a"
+    return "above" if price > ma else "below" if price < ma else "at"
+
+
+def label_regime(sma50, sma200) -> str:
+    if _missing(sma50) or _missing(sma200):
+        return "n/a"
+    return "golden_cross_regime" if sma50 > sma200 else "death_cross_regime"
+
+
+def label_volume(z) -> str:
+    if _missing(z):
+        return "n/a"
+    if z >= 2:
+        return "very_high"
+    if z >= 1:
+        return "high"
+    if z <= -1:
+        return "low"
+    return "normal"
+
+
+def label_volatility(atr_pct: pd.Series, window: int = 100) -> str:
+    s = atr_pct.dropna().tail(window)
+    if len(s) < 20:
+        return "n/a"
+    ratio = s.iloc[-1] / s.median()
+    return "elevated" if ratio > 1.3 else "compressed" if ratio < 0.75 else "normal"

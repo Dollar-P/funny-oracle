@@ -36,7 +36,20 @@ def main(ticker: str, mode: str, horizon: str) -> int:
         print(f"  {m.label}: {m.value} {m.delta or ''}")
     heads = [m.value for m in at.markdown if m.value.startswith(("### 🔮", "> **"))]
     print("  " + "\n  ".join(heads))
-    return 0 if not missing and charts >= 2 and not errors else 1
+    chat = [c.proto.name for c in at.get("chat_message")]
+    print("  debate thread:", " → ".join(chat) or "(none)")
+    from core import scoreboard
+
+    p = scoreboard.load(int(scoreboard.recent(1)["id"].iloc[0]))
+    for d in p.debate:
+        print(f"  [{d.side} {d.turn}] ({len(d.argument.split())} words) {d.argument[:160]}…")
+    tech = next((r for r in p.reports if r.agent == "technical"), None)
+    if tech:
+        print("  technical key points:")
+        for k in tech.key_points:
+            print("   -", k)
+    debate_ok = p.mode != "swing" or chat == ["Bull", "Bear", "Bull"]
+    return 0 if not missing and charts >= 2 and not errors and debate_ok else 1
 
 
 if __name__ == "__main__":

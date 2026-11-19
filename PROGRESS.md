@@ -12,7 +12,17 @@
 | 8 | Scoreboard + Auto-Scalp | 🟡 running — verify later (see below) | Scoreboard evaluation/metrics/leaderboard + Auto-Scalp tick: `pytest tests/test_orchestrator.py tests/test_autoscalp.py` (mocked). Real: `scripts/auto_scalp.py --runs 4 --interval 300` started 2026-11-19 22:29 local; first run = prediction #4 |
 | 9 | README + screenshots + demo rehearsal | ✅ done (live rehearsal is yours) | `README.md`, `docs/*.png`; demo steps 2–5 exercised via CLI / AppTest (NVDA swing, GC=F swing, debate, trace) |
 
-Full suite: `pytest -q` → **66 passed** (network tests included).
+Full suite: `pytest -q` → **85 passed** (network tests included).
+
+## Pre-demo polish (2026-11-19, after checkpoint 9)
+
+| Change | Verified by |
+|---|---|
+| **Sequential debate**: Bull opens (≤150 words) → Bear reads the Bull's text and rebuts (≤150) → Bull short reply (≤80, hard-capped in code). Judge gets the full transcript. UI shows a chat-style thread (🐂 / 🐻 avatars, "↩ responding to: …"). | mocked: order, who-saw-what, 80-word cap, Judge input (`test_orchestrator.py`), 3 chat messages (`test_app.py`); real: `ui_smoke.py NVDA swing 1M` → thread Bull → Bear → Bull, Bear explicitly rebutted the Bull's oversold-bounce point, reply 61 words |
+| **Deterministic signal labels** in `get_indicators.signals`: `price_vs_bollinger`, `rsi_zone`, `macd_cross` (+`macd_cross_bars_ago`, last 3 bars), `macd_momentum`, `trend_vs_sma20/50/200`, `sma_regime`, `volume_state`, `volatility_state`; plus `pct_vs_sma` and `pct_to_nearest` support/resistance. Technical prompt now must rely on and quote them as `label=value`. | unit tests per label + consistency with raw numbers (`test_mcp_tools.py`); live payloads ≈ 950 B; real: Technical key points quote labels verbatim, e.g. `rsi_zone=oversold (RSI 22.2)`, `price_vs_bollinger=near_lower_band (%B 0.14)` |
+| **Replay syncs the sidebar** (ticker, mode, horizon) from the Load button and from `?replay=<id>`. | `test_app.py` (Load button + query param + switching mode afterwards) |
+| **Safer JSON recovery** (found during verification, see Known issues): on a parse failure the agent first fixes its JSON *in the same conversation* (tools disabled, all tool results still in context); the context-free JSON-mode conversion is now a last resort, never runs on empty text, and is told to report confidence 0 rather than invent. Failing text is logged at WARNING. | `test_llm.py` (4 new cases) |
+
 
 ## How to run
 
@@ -36,13 +46,13 @@ Get-Content logs\auto_scalp.log | Select-String -NotMatch "HTTP Request"     # F
 
 Or open the app's **Scoreboard** tab, which evaluates due predictions on open. If fewer than 3 are evaluated, toggle **Auto-Scalp** in that tab (every 15 min, cap 40 per session) and check back after an hour.
 
-## Current spend (at 2026-11-19 22:31 local, before Auto-Scalp runs 2–4)
+## Current spend (at 2026-11-19 22:51 local, after the polish pass)
 
-**$0.117 ≈ ฿3.85 of ฿100** (77 LLM calls, 120.7k input / 12.6k output / 2.7k thinking tokens, all gemini-3.5-flash-lite). The 3 remaining Auto-Scalp runs add about $0.03 more. The sidebar always shows the live figure, and `cost.spend_summary()` has the details.
+**$0.170 ≈ ฿5.59 of ฿100**, all gemini-3.5-flash-lite (includes all 4 Auto-Scalp runs). The sidebar always shows the live figure, and `cost.spend_summary()` has the details.
 
 Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45–1.40, higher when the model searches), scalp ≈ $0.008 (≈ ฿0.27). gemini-3.8-flash is about 2.5× the per-token price, so a swing prediction should cost roughly ฿1–4.
 
-### Real Gemini usage log (cap ≈ 20 real predictions; used 11)
+### Real Gemini usage log (cap ≈ 20 real predictions; used 11 + 3 for the polish pass)
 
 | # | What | Cost |
 |---|---|---|
@@ -53,6 +63,9 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 | 7 | CP7: UI Predict button, GC=F swing 1M (prediction #3) | $0.0427 (incl. search) |
 | 8–11 | CP8: Auto-Scalp BTC-USD 15m (predictions #4–#7) | ≈ $0.009 each |
 | – | capability probes + one debug search call | ≈ $0.014 |
+| P1 | Polish: UI Predict NVDA swing 1M (prediction #8, 3-turn debate + labels) | ≈ $0.04 |
+| P2 | Polish: `orchestrator.py BTC-USD scalp 15m` (prediction #9) | $0.0086 |
+| P3 | Polish: Technical agent alone, BTC-USD scalp 15m (diagnosing #9) | $0.0019 |
 
 ## What you should check manually
 
@@ -81,7 +94,7 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 - **`llm_usage.run_id`** (extra column vs §4.8) links usage rows written during a run; `prediction_id` is filled in on save. `predictions` also has `run_id`, `cost_usd`, `source`, `prediction_json`.
 - **Budget guard**: before a prediction, refuse if `spent + estimate > BUDGET_THB`. Estimate = avg of the last 10 predictions of the mode × 1.25 (default $0.20 swing / $0.05 scalp). Also checked before every single LLM call. Auto-Scalp is additionally capped at `AUTO_SCALP_MAX_RUNS`.
 - **Claude provider**: `anthropic` SDK, manual loop, server `web_search`, `output_config.effort`; model IDs from `CLAUDE_*_MODEL`. Mocks only.
-- **Debate**: Bull and Bear run in parallel on the same reports (one round), so each rebuts the opponent's *strongest likely* point rather than the opponent's actual text.
+- **Debate** (updated in the polish pass): sequential Bull opening → Bear rebuttal → Bull reply (3 LLM calls, was 2 in parallel). If a turn fails the debate stops there. The reply is clipped to 80 words in code. Old stored predictions (no `turn` field) still render, bull first.
 - **Scalp mode**: Technical, Macro ("macro-lite" = max 3 tool turns), Psychology. No web search, no News Researcher, no debate; the Judge still runs (~4 LLM calls).
 - **Judge** sees each analyst's tool trace; adjustment is clipped to ±0.2 in code.
 - **Agent timeout** is 45 s (`AGENT_TIMEOUT_S`). A timed-out agent is marked absent and the weights are renormalized. If every analyst fails, S=0 and the Judge is skipped.
@@ -94,8 +107,9 @@ Observed cost per prediction (flash-lite): swing ≈ $0.014–0.043 (≈ ฿0.45
 
 ## Known issues
 
+- **Intermittent invalid JSON from flash-lite** (seen once in the polish run, prediction #9): the Technical and Psychology agents' final text failed to parse, and the old context-free repair call produced generic filler ("Positive momentum observed"). Recovery now fixes the JSON inside the conversation first (see the polish table). The failing text wasn't captured, so the root cause is unknown. It's logged now, so watch the console for `output not valid JSON` warnings. Prediction #9 stays in the DB as it was.
+
 - CP5 runs happened before server-side search `tool_call` parts were counted, so their recorded cost excludes search requests (at most ~10 queries ≈ $0.14 at list price, likely $0 under the free tier). Fixed since then in `GeminiBackend._search_queries`.
 - flash-lite occasionally misreads indicator values (e.g. said price was below the lower Bollinger band when it was above). The Judge sees the trace and is told to be skeptical; gemini-3.8-flash should help.
-- The sidebar ticker box doesn't change when you replay a stored prediction (the replay shows its own ticker in the header).
 - In grounded mode the analysts may choose `get_news` instead of Google Search (prediction #1 made no searches). That's the model's choice and it's cheaper. The News Researcher is used only when search can't be combined with tools.
 - yfinance keeps 1m bars for ~7 days, so scalp predictions older than that are evaluated from 5m bars (15m horizon) or not at all.

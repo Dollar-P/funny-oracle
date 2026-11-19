@@ -107,7 +107,7 @@ Built with the MCP Python SDK **2.x** (`mcp.server.mcpserver.MCPServer` — the 
 | Tool | Input | Output (JSON) | Source |
 |---|---|---|---|
 | `get_price_history` | ticker, interval (`1m`…`1d`), period | last N bars + summary (last, %chg, high/low) | yfinance |
-| `get_indicators` | ticker, interval | RSI14, MACD, SMA20/50/200, EMA, Bollinger, ATR, volume z-score, support/resistance | computed from OHLCV |
+| `get_indicators` | ticker, interval | `signals` (deterministic labels: price_vs_bollinger, rsi_zone, macd_cross, macd_momentum, trend_vs_sma20/50/200, sma_regime, volume_state, volatility_state) + RSI14, MACD, SMA20/50/200, EMA, Bollinger, ATR, volume z-score, support/resistance and % distances | computed from OHLCV |
 | `get_fundamentals` | ticker | P/E, Fwd P/E, PEG, EV/EBITDA, margins, revenue growth, FCF, debt/equity, analyst target | yfinance `.info` |
 | `get_macro` | – | FEDFUNDS, CPI YoY, DGS10, DFII10 (real yield), T10Y2Y, DXY, ^VIX | FRED API if `FRED_API_KEY` is set, otherwise FRED's public `fredgraph.csv` endpoint (no key) + yfinance |
 | `get_news` | ticker, limit | headline, publisher, date, link | yfinance `.news` |
@@ -189,7 +189,7 @@ A Search-only agent that runs before the analysts and returns a `NewsBrief` (5�
 
 ### 4.5 Debate & Judge — `agents/debate.py`, `agents/judge.py`
 
-- **Bull Agent** / **Bear Agent** read all 5 AgentReports. Each writes an argument (≤ 150 words) that must rebut the opponent's strongest point. One round, no tool calls.
+- Sequential, no tool calls: **Bull** opens from the 5 AgentReports (≤ 150 words) → **Bear** reads the Bull's text and rebuts its strongest point (≤ 150) → **Bull** gives a short reply (≤ 80, clipped in code). The UI shows the three turns as a chat thread.
 - **Judge** receives reports + debate + `S_raw` and returns:
   ```python
   class Verdict(BaseModel):
