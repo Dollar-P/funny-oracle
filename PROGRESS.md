@@ -6,7 +6,7 @@
 | 2 | `mcp_server` + `data_sources` + `indicators` | ✅ done | `pytest tests/test_mcp_tools.py` (25 passed, live data) |
 | 3 | Register MCP in Claude Code | ✅ done | `claude mcp add market-data` (✔ Connected) + `pytest tests/test_mcp_client.py` |
 | 4 | `llm.py` + `mcp_client.py` + agent loop + `cost.py` | ✅ done | `python scripts/run_agents.py BTC-USD --agents technical` → valid AgentReport, $0.0029 logged in `llm_usage`; `pytest tests/test_llm.py` (mocked) |
-| 5 | Remaining agents + News Researcher | ⏳ | |
+| 5 | Remaining agents + News Researcher | ✅ done | `python scripts/run_agents.py <T> --agents all` for NVDA, BTC-USD, GC=F → 15/15 valid reports; News Researcher (search + get_news modes) covered by mocks |
 | 6 | Debate + Judge + Monte Carlo + orchestrator | ⏳ | |
 | 7 | Streamlit UI | ⏳ | |
 | 8 | Scoreboard + Auto-Scalp | ⏳ | |
@@ -18,6 +18,8 @@
 |---|---|---|---|
 | 1 | CP4: Technical agent alone, BTC-USD swing 1M | gemini-3.5-flash-lite | $0.0029 |
 | – | capability probes (search+functions) | gemini-3.5-flash-lite | <$0.0001 |
+| 2–4 | CP5: all 5 agents × NVDA / BTC-USD / GC=F (swing 1M) | gemini-3.5-flash-lite | $0.0089 / $0.0096 / $0.0083 (+ uncounted searches, see Known issues) |
+| – | one debug search call to inspect server-side tool parts | gemini-3.5-flash-lite | $0.0141 |
 
 ## Decisions
 
@@ -38,5 +40,7 @@
 - **Claude provider** (`LLM_PROVIDER=claude`): implemented with the `anthropic` SDK (manual loop, server `web_search`, `output_config.effort`), model IDs from `CLAUDE_*_MODEL` in `.env`. Only covered by mocks — never called for real.
 
 ## Known issues
+
+- CP5 runs happened before server-side search `tool_call` parts were counted, so their recorded cost excludes search requests (at most ~10 queries ≈ $0.14 at list price, likely $0 under the 5,000/month free tier). Fixed since: `GeminiBackend._search_queries`.
 
 - flash-lite occasionally misreads indicator values (e.g. said price was below the lower Bollinger band when it was above). The Judge sees the trace and is told to be skeptical; a stronger model (gemini-3.8-flash) should help.

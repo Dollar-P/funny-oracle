@@ -218,14 +218,37 @@ class GeminiBackend:
         return resp, u, c
 
     @staticmethod
-    def _usage(resp, model: str) -> Usage:
-        m = getattr(resp, "usage_metadata", None)
-        searches = 0
+    def _search_queries(resp) -> list[str]:
+        """Search queries run server-side in this response.
+
+        With include_server_side_tool_invocations the calls arrive as `tool_call` parts
+        (tool_type GOOGLE_SEARCH_WEB); otherwise only grounding_metadata has them.
+        """
+        from_parts: list[str] = []
+        from_meta: list[str] = []
         for cand in getattr(resp, "candidates", None) or []:
+            for part in (cand.content.parts if cand.content and cand.content.parts else []):
+                tc = getattr(part, "tool_call", None)
+                if tc is not None and "SEARCH" in str(tc.tool_type or ""):
+                    qs = (tc.args or {}).get("queries") or ["(search)"]
+                    from_parts += [str(q) for q in qs]
             gm = getattr(cand, "grounding_metadata", None)
             if gm is not None:
-                q = gm.web_search_queries or []
-                searches += len(q) or (1 if gm.grounding_chunks else 0)
+                from_meta += list(gm.web_search_queries or []) or (["(search)"] if gm.grounding_chunks else [])
+        return from_parts if len(from_parts) >= len(from_meta) else from_meta
+
+    @staticmethod
+    def _text(resp) -> str:
+        """Concatenate non-thought text parts (avoids the SDK's mixed-parts warning)."""
+        cand = (getattr(resp, "candidates", None) or [None])[0]
+        if cand is None or cand.content is None or not cand.content.parts:
+            return ""
+        return "".join(p.text for p in cand.content.parts if p.text and not p.thought)
+
+    @classmethod
+    def _usage(cls, resp, model: str) -> Usage:
+        m = getattr(resp, "usage_metadata", None)
+        searches = len(cls._search_queries(resp))
         if m is None:
             return Usage(model, search_calls=searches)
         return Usage(
@@ -289,10 +312,12 @@ class GeminiBackend:
             total, spent = total + u, spent + c
             cand = (resp.candidates or [None])[0]
             gm = getattr(cand, "grounding_metadata", None) if cand else None
-            if gm is not None and (gm.grounding_chunks or gm.web_search_queries):
+            queries = self._search_queries(resp)
+            if queries:
                 searched = True
-                trace.append(ToolCall(tool="google_search", args={"queries": list(gm.web_search_queries or [])},
-                                      result_bytes=len(gm.grounding_chunks or [])))
+                trace.append(ToolCall(tool="google_search", args={"queries": queries},
+                                      result_bytes=len(gm.grounding_chunks or []) if gm else 0))
+            if gm is not None:
                 for ch in gm.grounding_chunks or []:
                     web = getattr(ch, "web", None)
                     if web is not None and web.uri:
@@ -301,7 +326,7 @@ class GeminiBackend:
             if cand is not None and cand.content is not None:
                 contents.append(cand.content)  # keeps thought signatures for the next turn
             if not calls or final:
-                text = resp.text or ""
+                text = self._text(resp)
                 break
             results = await asyncio.gather(*(
                 self._exec(executor, fc.name, dict(fc.args or {}), allowed) for fc in calls
@@ -332,7 +357,7 @@ class GeminiBackend:
                 fcfg, agent)
             total, spent = total + u, spent + c
             try:
-                output = parse_output(resp.text or "", schema)
+                output = parse_output(self._text(resp), schema)
             except (ValueError, ValidationError) as e2:
                 error = f"invalid JSON output after retry: {e2}"[:300]
 

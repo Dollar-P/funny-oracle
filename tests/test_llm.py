@@ -171,3 +171,50 @@ def test_search_plus_functions_sets_server_side_flag(fresh_db):
     fake = FakeGemini([text_response(AGENT_JSON)])
     run(MacroAgent(LLM("gemini", client=fake), MODEL, FakeExecutor(), enable_search=True).run(ctx()))
     assert fake.requests[0]["config"].tool_config.include_server_side_tool_invocations is True
+
+
+def test_news_researcher_search_mode(fresh_db):
+    import json as _j
+
+    from agents.news_researcher import NewsResearcher
+
+    brief = _j.dumps({"bullets": ["Fed holds rates (2026-11-18)"], "links": []})
+    fake = FakeGemini([text_response(brief, grounding=["https://news.example/a"])])
+    nb, trace, c, err = run(NewsResearcher(LLM("gemini", client=fake), MODEL, None, "search").run(ctx()))
+    assert err is None and nb.bullets and "https://news.example/a" in nb.links
+    cfg = fake.requests[0]["config"]
+    assert any(t.google_search for t in cfg.tools) and not any(t.function_declarations for t in cfg.tools)
+
+
+def test_news_researcher_tool_mode(fresh_db):
+    import json as _j
+
+    from agents.news_researcher import NewsResearcher
+
+    brief = _j.dumps({"bullets": ["Headline A"], "links": ["https://x"]})
+    fake = FakeGemini([fn_call_response(("get_news", {"ticker": "BTC-USD"})), text_response(brief)])
+    ex = FakeExecutor()
+    nb, trace, c, err = run(NewsResearcher(LLM("gemini", client=fake), MODEL, ex, "tool").run(ctx()))
+    assert nb.bullets == ["Headline A"] and ex.calls[0][0] == "get_news"
+    assert not any(t.google_search for t in fake.requests[0]["config"].tools)
+
+
+def test_server_side_search_parts_are_counted(fresh_db):
+    from google.genai import types
+
+    resp = types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(role="model", parts=[
+            types.Part(tool_call=types.ToolCall(id="s1", tool_type="GOOGLE_SEARCH_WEB",
+                                                args={"queries": ["fed decision", "fomc 2026"]})),
+            types.Part(tool_response=types.ToolResponse(id="s1", tool_type="GOOGLE_SEARCH_WEB", response={})),
+            types.Part(text=AGENT_JSON),
+        ]))],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(prompt_token_count=100, candidates_token_count=50),
+    )
+    from agents.macro import MacroAgent
+
+    rep = run(MacroAgent(LLM("gemini", run_id="ss", client=FakeGemini([resp])), MODEL, FakeExecutor(),
+                         enable_search=True).run(ctx()))
+    assert rep.ok
+    assert rep.trace[0].tool == "google_search" and rep.trace[0].args["queries"] == ["fed decision", "fomc 2026"]
+    assert cost.run_cost("ss") == pytest.approx(100 * 0.3 / 1e6 + 50 * 2.5 / 1e6 + 2 * 0.014)
