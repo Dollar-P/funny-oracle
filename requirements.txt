@@ -10,3 +10,6 @@ httpx>=0.27
 python-dotenv>=1.0
 pytest>=8.0
 anthropic>=2.0          # optional, only for LLM_PROVIDER=claude
+fastapi>=0.115          # web API (REDESIGN)
+uvicorn[standard]>=0.30
+sse-starlette>=3.0

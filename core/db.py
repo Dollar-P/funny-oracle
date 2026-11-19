@@ -46,6 +46,7 @@ CREATE INDEX IF NOT EXISTS ix_pred_target ON predictions(target_time, actual_pri
 """
 
 _initialized: set[str] = set()
+ANALYST_AGENTS = ("business", "technical", "valuation", "macro", "psychology", "news_researcher")
 
 # Additive columns (REDESIGN): per-run models and duel grouping.
 MIGRATIONS = {
@@ -61,6 +62,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_pred_duel ON predictions(duel_id)")
+    # Backfill models for rows saved before the columns existed: most-used model in llm_usage.
+    for col, agents in (("analyst_model", ANALYST_AGENTS), ("judge_model", ("judge",))):
+        marks = ",".join("?" * len(agents))
+        conn.execute(
+            f"UPDATE predictions SET {col} = (SELECT u.model FROM llm_usage u WHERE u.prediction_id = predictions.id"
+            f" AND u.agent IN ({marks}) GROUP BY u.model ORDER BY COUNT(*) DESC LIMIT 1) WHERE {col} IS NULL",
+            agents)
 
 
 def db_path() -> Path:

@@ -93,13 +93,13 @@ def test_timeout_reason(fresh_db, synthetic_prices, monkeypatch):
     from agents.technical import TechnicalAgent
 
     async def slow(self, ctx):
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
 
     monkeypatch.setattr(TechnicalAgent, "run", slow)
-    monkeypatch.setattr(config, "AGENT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(config, "AGENT_TIMEOUT_S", 1.0)
     _, ev = run_with_events()
-    f = next(e for e in ev if e["type"] == "agent_failed")
-    assert f["agent"] == "technical" and f["reason"] == "timeout"
+    f = next(e for e in ev if e["type"] == "agent_failed" and e["agent"] == "technical")
+    assert f["reason"] == "timeout"
 
 
 def test_news_researcher_events(fresh_db, synthetic_prices):

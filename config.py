@@ -107,6 +107,13 @@ REFERENCE_PRICE_MODEL = "gemini-3.8-flash"
 AUTO_SCALP_MAX_RUNS = int(_env("AUTO_SCALP_MAX_RUNS", "40"))
 AUTO_SCALP_INTERVAL_S = int(_env("AUTO_SCALP_INTERVAL_S", "900"))
 
+# --- Web API (REDESIGN) ----------------------------------------------------------
+MOCK_LLM = _bool("MOCK_LLM", False)          # replay stored predictions as fake live shows (฿0)
+MOCK_SPEED = float(_env("MOCK_SPEED", "1"))  # delay multiplier for mock shows (0 = instant)
+API_PORT = int(_env("API_PORT", "8000"))
+MAX_CONCURRENT_RUNS = int(_env("MAX_CONCURRENT_RUNS", "2"))
+ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
+
 # --- Cache TTLs (seconds) — §4.1 ----------------------------------------------
 TTL_INTRADAY = 60
 TTL_DAILY = 15 * 60
