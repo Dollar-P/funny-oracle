@@ -54,6 +54,10 @@ class _AgentExecutor:
         return data, tc
 
 
+SCALP_LOCAL_REFUSAL = ("Local models are too slow for Scalp mode (a 15-minute horizon would be over before the show "
+                       "ends). Use Swing, or pick a Gemini model for Scalp.")
+
+
 def _validate(mode: str, horizon: str) -> None:
     if mode not in config.HORIZONS:
         raise ValueError(f"mode must be one of {list(config.HORIZONS)}")
@@ -73,9 +77,11 @@ def resolve_models(mode: str, provider: str | None = None, analyst_model: str | 
 
 
 async def _search_mode(llm: LLM, model: str, mode: str) -> str:
-    """grounded | news_search | news_tool | off"""
+    """grounded | news_search | news_web | news_tool | off"""
     if mode != "swing":
         return "off"  # scalp: latency first, no web search
+    if llm.provider == "local":
+        return "news_web"  # no grounding: News Researcher with the web_search / fetch_url MCP tools
     if not config.ENABLE_SEARCH:
         return "news_tool"
     if await llm.supports(model, "search+functions"):
@@ -125,18 +131,19 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
                          save: bool = True, seed: int | None = None,
                          on_event: OnEvent | None = None, analyst_model: str | None = None,
                          judge_model: str | None = None, run_id: str | None = None,
-                         duel_id: str | None = None) -> Prediction:
+                         duel_id: str | None = None, think_preset: str | None = None) -> Prediction:
     """One prediction end to end.
 
     on_event: async callback receiving every run event (REDESIGN §2.2); None → no events.
     analyst_model / judge_model: per-run override; None → the model from .env for that role.
+    think_preset: local models only — "quick" (thinking off) or "deep" (LOCAL_LLM.md policy).
     """
     run_id = run_id or uuid.uuid4().hex
     events = EventSink(on_event, run_id)
     try:
         return await _run(ticker, mode, horizon, progress=progress, source=source, llm=llm, executor=executor,
                           save=save, seed=seed, events=events, analyst_model=analyst_model,
-                          judge_model=judge_model, run_id=run_id, duel_id=duel_id)
+                          judge_model=judge_model, run_id=run_id, duel_id=duel_id, think_preset=think_preset)
     except cost.BudgetExceeded as e:
         await events.emit("error", message=str(e), fatal=True, kind="budget")
         raise
@@ -146,7 +153,7 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
 
 
 async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, seed, events: EventSink,
-               analyst_model, judge_model, run_id, duel_id) -> Prediction:
+               analyst_model, judge_model, run_id, duel_id, think_preset=None) -> Prediction:
     t0 = time.perf_counter()
     say = progress or (lambda m: log.info(m))
     _validate(mode, horizon)
@@ -155,8 +162,13 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     hz = config.HORIZONS[mode][horizon]
     if llm is None:
         provider = config.provider_for(analyst_model) if analyst_model else None
-        llm = LLM(provider=provider, run_id=run_id)
+        llm = LLM(provider=provider, run_id=run_id, think_preset=think_preset)
+    elif think_preset:
+        llm.think_preset = think_preset
     llm.run_id = run_id
+    local = llm.provider == "local"
+    if local and mode == "scalp":
+        raise ValueError(SCALP_LOCAL_REFUSAL)
     llm.events = events
     models = resolve_models(mode, llm.provider, analyst_model, judge_model)
     for role, m in models.items():
@@ -171,9 +183,15 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     analyst_kw: dict = {}
     if mode == "scalp":
         analyst_kw = {"max_turns": 3}
+    if local:
+        analyst_kw = {"max_turns": config.LOCAL_MAX_TURNS}
+    agent_timeout = config.LOCAL_TIMEOUT_S if local else config.AGENT_TIMEOUT_S
+    # local: one GPU → agents take turns; each agent's timeout starts when it gets the GPU, not while queued
+    agent_slots = asyncio.Semaphore(max(1, config.LOCAL_CONCURRENCY)) if local else None
     await events.emit("run_started", ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, models=models,
                       agents=active, weights=weights, est_cost_thb=cost.usd_to_thb(est), duel_id=duel_id,
-                      budget_thb=guard.budget_thb, mock=False)
+                      budget_thb=guard.budget_thb, mock=False,
+                      think_preset=llm.think_preset if local else None)
 
     # price data for the quant engine (doesn't need the LLM)
     say(f"Fetching volatility history for {ticker}")
@@ -190,8 +208,14 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"])
 
     async def run_one(ag) -> AgentReport:
+        if agent_slots is not None:
+            async with agent_slots:
+                return await _run_agent(ag)
+        return await _run_agent(ag)
+
+    async def _run_agent(ag) -> AgentReport:
         await events.emit("agent_started", agent=ag.name)
-        r = await _with_timeout(ag.run(ctx), ag.name, config.AGENT_TIMEOUT_S)
+        r = await _with_timeout(ag.run(ctx), ag.name, agent_timeout)
         if r.ok:
             await events.emit("agent_done", agent=r.agent, report=r.model_dump(mode="json"))
         else:
@@ -209,10 +233,10 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
             await events.emit("stage", name="news")
         search_mode = await _search_mode(llm, models["analyst"], mode)
         say(f"Search mode: {search_mode}")
-        if search_mode in ("news_search", "news_tool"):
+        if search_mode in ("news_search", "news_tool", "news_web"):
             say("News Researcher gathering headlines")
             nr = NewsResearcher(llm, models["analyst"], _AgentExecutor(mc, NewsResearcher.name, say, events),
-                                "search" if search_mode == "news_search" else "tool")
+                                {"news_search": "search", "news_tool": "tool", "news_web": "web"}[search_mode])
             ctx.news, _, _, err = await nr.run(ctx)
             if err:
                 say(f"News Researcher failed: {err}")
@@ -276,7 +300,7 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
         debate=debate, verdict=verdict, forecast=forecast, cost_usd=cost.run_cost(run_id),
         cost_actual_usd=cost.run_cost_actual(run_id),
         elapsed_s=round(time.perf_counter() - t0, 1), search_mode=search_mode,
-        models=models, run_id=run_id, duel_id=duel_id,
+        models=models, run_id=run_id, duel_id=duel_id, think_preset=llm.think_preset if local else None,
     )
     if save:                                                                            # [8]
         scoreboard.save(pred, run_id, source)

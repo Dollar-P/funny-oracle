@@ -124,3 +124,4 @@ class Prediction(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)  # role → model ID used for this run
     run_id: str | None = None
     duel_id: str | None = None   # shared by both runs of a Model-vs-Model duel
+    think_preset: str | None = None  # local models: quick | deep (LOCAL_LLM.md)

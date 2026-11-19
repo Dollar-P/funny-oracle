@@ -210,3 +210,20 @@ def test_provider_and_presets():
     assert config.provider_for("openai/gpt-oss-20b") == "gemini"  # unprefixed ids are never treated as local
     with pytest.raises(ValueError):
         LLM("local", think_preset="medium")
+
+
+def test_scalp_refuses_local_models_before_any_call(fresh_db):
+    import orchestrator
+
+    fake = FakeLocal([])
+    llm = LLM("local", client=fake)
+    with pytest.raises(ValueError, match="too slow for Scalp"):
+        anyio.run(lambda: orchestrator.run_prediction("BTC-USD", "scalp", "15m", llm=llm, executor=FakeExecutor(),
+                                                      analyst_model=MODEL))
+    assert fake.requests == []
+
+
+def test_local_swing_uses_news_web_mode():
+    import orchestrator
+
+    assert anyio.run(lambda: orchestrator._search_mode(LLM("local", client=FakeLocal([])), MODEL, "swing")) == "news_web"

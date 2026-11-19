@@ -44,6 +44,14 @@ tests included).
 | R7 | Duel, Hall of Fame, Auto-Scalp card, share card | ✅ | `web/e2e/r7.mjs`: Hall of Fame on the real DB, 1080×1350 share PNG, mock duel → head-to-head |
 | R8 | Real-run verification + polish | ✅ | 5 real runs through the production build in headless Chrome (table below), every agent present; reduced motion (no drumroll / typewriter / confetti) vs normal (all three); 390 px with no horizontal scroll (`web/e2e/mobile.mjs`); `scripts\dev.ps1` brings up both servers; screenshots in `docs/`. CLI and Streamlit unchanged |
 
+## Local LLM (branch `local-llm`, in progress — not merged)
+
+Spec: `LOCAL_LLM.md`. Done and unit-tested (mocked server): step 2 `openai_compat` provider in `core/llm.py`
+(lessons 1-8, 10); step 3 `web_search` / `fetch_url` MCP tools (lesson 9); step 4 pipeline wiring (News
+Researcher `web` mode, LOCAL_MAX_TURNS / LOCAL_TIMEOUT_S, queue-aware agent timeouts, Quick/Deep preset,
+scalp refusal). **Not done yet:** step 5 API + Arena/Duel model picker for local models; step 6 real runs
+against LM Studio (1 swing Quick + 1 duel local vs gemini-3.5-flash-lite); step 7 final docs.
+
 ## GitHub readiness (2026-11-20, not pushed)
 
 - **Secrets scan** of the working tree and all commits (every blob on every ref, commit messages, plus the
