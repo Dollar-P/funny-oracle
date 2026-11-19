@@ -8,7 +8,7 @@
 | 4 | `llm.py` + `mcp_client.py` + agent loop + `cost.py` | ✅ done | `python scripts/run_agents.py BTC-USD --agents technical` → valid AgentReport, $0.0029 logged in `llm_usage`; `pytest tests/test_llm.py` (mocked) |
 | 5 | Remaining agents + News Researcher | ✅ done | `python scripts/run_agents.py <T> --agents all` for NVDA, BTC-USD, GC=F → 15/15 valid reports; News Researcher (search + get_news modes) covered by mocks |
 | 6 | Debate + Judge + Monte Carlo + orchestrator | ✅ done | `python orchestrator.py NVDA swing 1M` → P10 134.85 / P50 155.51 / P90 178.89 (11 s, $0.0137); also `BTC-USD scalp 15m`; `pytest tests/test_montecarlo.py tests/test_orchestrator.py` |
-| 7 | Streamlit UI | ⏳ | |
+| 7 | Streamlit UI | ✅ done | `python scripts/ui_smoke.py GC=F swing 1M` (real: Predict → all sections, 2 charts, no errors); `pytest tests/test_app.py` (AppTest, mocked); `streamlit run app.py` health OK; light/dark/scalp screenshots reviewed |
 | 8 | Scoreboard + Auto-Scalp | ⏳ | |
 | 9 | README + demo rehearsal | ⏳ | |
 
@@ -22,6 +22,7 @@
 | – | one debug search call to inspect server-side tool parts | gemini-3.5-flash-lite | $0.0141 |
 | 5 | CP6: `orchestrator.py NVDA swing 1M` (prediction #1) | gemini-3.5-flash-lite | $0.0137 |
 | 6 | CP6: `orchestrator.py BTC-USD scalp 15m` (prediction #2) | gemini-3.5-flash-lite | $0.0075 |
+| 7 | CP7: UI Predict button, GC=F swing 1M (prediction #3) | gemini-3.5-flash-lite | ≈$0.043 (฿1.41, incl. search) |
 
 ## Decisions
 
@@ -48,6 +49,9 @@
 - **Monte Carlo**: log-normal increments N(μ_adj, σ) without the −σ²/2 term, so S=0 ⇒ median = today's price and P(up) ≈ 50%. Steps: stocks/gold 5/21/63 trading days, crypto 7/30/91 days; scalp 15×1m, 12×5m, 16×15m. σ from 1y daily (swing) or 5d of the scalp interval.
 - **Predicted direction** for the hit rate = `prob_up > 0.5`; predictions with exactly 0.5 are excluded from the hit rate. Agent leaderboard uses sign(score), skipping 0 scores.
 - **Prediction storage**: the full `Prediction` JSON is stored in `predictions.prediction_json` so the UI can replay past runs without API calls (demo "replay mode").
+
+- **UI**: Plotly charts use the dataviz reference palette (blue series, blue/red diverging scores, gray zero line), one y-axis, hover on every chart, dark-mode steps picked from `st.context.theme`. Score "gauge" is drawn as a diverging bar row (agents + team S_final) rather than a dial — same information, easier to compare. `?replay=<id>` URL param opens a stored prediction (demo links, no API cost).
+- **LLM selector** in the sidebar only lists `claude` when `CLAUDE_ANALYST_MODEL` is set.
 
 ## Known issues
 
