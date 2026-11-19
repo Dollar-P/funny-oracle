@@ -5,6 +5,8 @@ import asyncio
 import logging
 import time
 
+import pandas as pd
+
 from fastapi import APIRouter, HTTPException, Query
 
 from core.asset import classify, normalize
@@ -99,13 +101,52 @@ async def quote(ticker: str):
         raise HTTPException(404, f"no quote for {ticker}: {e}")
 
 
+COARSER = ["1m", "5m", "15m", "1h", "1d"]
+
+
+def _parse_ts(s: str | None) -> pd.Timestamp | None:
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) > 19 and s[-6] == " ":  # an unencoded "+00:00" offset arrives as " 00:00"
+        s = s[:-6] + "+" + s[-5:]
+    t = pd.Timestamp(s)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def history_window(ticker: str, interval: str, start: pd.Timestamp, end: pd.Timestamp | None) -> tuple[str, pd.DataFrame]:
+    """Bars covering [start, end]. yfinance keeps 1m for ~7 days and 5m/15m for ~60, so when the requested
+    interval no longer reaches back to `start`, fall back to the next coarser one."""
+    chain = COARSER[COARSER.index(interval):] if interval in COARSER else [interval, "1d"]
+    last: tuple[str, pd.DataFrame] | None = None
+    for iv in chain:
+        try:
+            df = ds.fetch_ohlcv(ticker, iv, None)
+        except Exception as e:
+            log.info("history %s %s failed: %s", ticker, iv, e)
+            continue
+        win = df[(df.index >= start) & ((df.index <= end) if end is not None else True)]
+        last = (iv, win)
+        if len(df) and df.index[0] <= start and len(win) >= 2:
+            return iv, win
+    if last is None:
+        raise ValueError("no data")
+    return last
+
+
 @router.get("/history/{ticker}")
-async def history(ticker: str, interval: str = "1d", period: str | None = None, limit: int = Query(300, le=500)):
+async def history(ticker: str, interval: str = "1d", period: str | None = None, limit: int = Query(300, le=500),
+                  start: str | None = None, end: str | None = None):
+    """Latest `limit` bars, or with `start` (ISO) the bars between start and end (default now) — used to
+    anchor a replayed forecast to its original time. `interval` in the reply is the one actually used."""
     try:
-        df = await asyncio.to_thread(ds.fetch_ohlcv, ticker, interval, period)
+        if start:
+            used, df = await asyncio.to_thread(history_window, ticker, interval, _parse_ts(start), _parse_ts(end))
+        else:
+            used, df = interval, await asyncio.to_thread(ds.fetch_ohlcv, ticker, interval, period)
     except Exception as e:
         raise HTTPException(404, f"no history for {ticker}: {e}")
     df = df.iloc[-limit:]
     candles = [{"time": int(ts.timestamp()), "open": float(r.Open), "high": float(r.High), "low": float(r.Low),
                 "close": float(r.Close), "volume": float(r.Volume)} for ts, r in df.iterrows()]
-    return {"symbol": normalize(ticker), "interval": interval, "candles": candles}
+    return {"symbol": normalize(ticker), "interval": used, "requested_interval": interval, "candles": candles}

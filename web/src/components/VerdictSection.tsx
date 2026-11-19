@@ -3,7 +3,8 @@ import type { ShowState } from "../state/show";
 import VerdictCard, { Drumroll, useReveal } from "./VerdictReveal";
 import ForecastChart from "./ForecastChart";
 import PrizeCards from "./PrizeCards";
-import Countdown from "./Countdown";
+import { useState } from "react";
+import Countdown, { OriginalResult } from "./Countdown";
 import { shortModel, thb } from "../lib/format";
 import { useBudget } from "./BudgetMeter";
 
@@ -12,17 +13,24 @@ export default function VerdictSection({
   runId,
   reveal = true,
   actions,
+  actual: actualProp = null,
 }: {
   s: ShowState;
   runId?: string | null;
   reveal?: boolean;
   actions?: React.ReactNode;
+  actual?: number | null;
 }) {
+  const [actualSeen, setActualSeen] = useState<number | null>(null);
   const { phase, animated } = useReveal(runId ?? null, reveal);
   const fx = useBudget().data?.usd_thb ?? 33;
   const q = s.quant;
   const p = s.prediction;
   const m = s.meta;
+  // a mock show moved to "now" draws today's market; everything else is anchored to the prediction's own time
+  const shifted = !!m?.mock && !!m?.shifted;
+  const createdAt = p?.created_at ?? q?.created_at ?? m?.createdAt ?? (m ? new Date(m.startedTs).toISOString() : "");
+  const actual = shifted ? null : (actualProp ?? actualSeen);
   return (
     <>
       <Drumroll on={phase === "drumroll"} />
@@ -50,9 +58,14 @@ export default function VerdictSection({
                 asset={m.assetType}
                 fan={q.fan}
                 stepLabel={q.step_label}
-                createdAt={p?.created_at ?? new Date(m.startedTs).toISOString()}
+                createdAt={createdAt}
+                targetTime={q.target_time}
+                actual={actual}
                 animate={animated}
               />
+              {shifted && m.rescaled === false && (
+                <p className="text-xs text-gold">⚠ Live price unavailable — the fan keeps the original show's prices.</p>
+              )}
               <PrizeCards now={q.price_now} p10={q.p10} p50={q.p50} p90={q.p90} probUp={q.prob_up} />
               {(m.mode === "scalp" || p) && (
                 <Countdown
@@ -62,9 +75,11 @@ export default function VerdictSection({
                   probUp={q.prob_up}
                   p10={q.p10}
                   p90={q.p90}
-                  mock={m.mock}
+                  kind={shifted ? "shifted" : "track"}
+                  onActual={setActualSeen}
                 />
               )}
+              {shifted && m.replayOf != null && <OriginalResult pid={m.replayOf} />}
               {actions && <div className="flex flex-wrap gap-2 pt-1">{actions}</div>}
               <footer className="text-xs text-ink-faint flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-3">
                 <span>

@@ -67,6 +67,10 @@ export const api = {
     req<{ symbol: string; interval: string; candles: Candle[] }>(
       `/history/${encodeURIComponent(t)}?interval=${interval}${period ? `&period=${period}` : ""}&limit=${limit}`,
     ),
+  historyWindow: (t: string, interval: string, start: string, end: string, limit = 500) =>
+    req<{ symbol: string; interval: string; requested_interval: string; candles: Candle[] }>(
+      `/history/${encodeURIComponent(t)}?interval=${interval}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=${limit}`,
+    ),
   startPrediction: (b: StartRun) => post<{ run_id: string; mock: boolean }>("/predictions", b),
   replay: (id: number) => post<{ run_id: string; mock: boolean }>(`/predictions/${id}/replay`),
   predictions: (params: { limit?: number; ticker?: string; mode?: string; model?: string } = {}) => {

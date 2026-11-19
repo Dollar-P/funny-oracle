@@ -1,7 +1,7 @@
 # Progress
 
 Status as of 2026-11-20. Default model: **gemini-3.5-flash-lite** for every role (pick others per run in the
-Arena / Duel). Full suite: `pytest -q` → **166 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
+Arena / Duel). Full suite: `pytest -q` → **170 passed** (`tests/` + `api/tests`, set in `pytest.ini`; network
 tests included).
 
 ## Status
@@ -161,8 +161,24 @@ free for the first 5,000 queries a month.
   `error`. The rope shows a provisional S from finished agents until `aggregate`. The verdict waits until the
   debate has been typed out; the drumroll plays once per run. Duel lanes report their reduced state from an
   effect.
-- **Fan chart** (lightweight-charts 5): the fan starts at the prediction's `created_at`; later candles are drawn
-  faded (on replays you see what really happened); daily stock/gold fans skip weekends.
+- **Fan chart** (lightweight-charts 5), fixed 2026-11-20 after a mock/replay of #4 (BTC scalp 15m) showed three
+  inconsistencies (before/after screenshots in `docs/chart_consistency/`):
+  - **Local time**: timestamps are shifted by the browser's UTC offset before they reach the chart (the
+    library's recommended approach), so axis, crosshair and day boundaries read in e.g. Asia/Bangkok and match
+    the tables and headers. The caption names the timezone.
+  - **Anchored to the prediction's own time**: the chart fetches `GET /api/history/{t}?interval=&start=&end=`
+    around `created_at` (120 scalp bars / ~130 trading days before, until the target + 25%), falling back to a
+    coarser interval once yfinance no longer keeps the requested one. The fan starts at the original price;
+    candles after `created_at` are faded and drawn *above* the fan (the P10 shading had been hiding reality
+    whenever it fell below P10); the actual price at `target_time` is a white dot with a labelled dotted line.
+  - **Mock shows**: Arena/Duel mocks move to "now" and are always rescaled to the live last close *at the
+    chart's interval*. Before, Arena mocks were rescaled to the 15-min-cached daily close (fan ≈ ฿240 off the
+    last 1m candle), and "▶ Replay the show" shifted the clock but didn't rescale at all (fan at the old price
+    beside today's candles). "Replay the show" now keeps the original time, prices, models and result,
+    identical to `/p/:id`. A shifted mock no longer shows the original ✅/❌ next to the live chart; a labelled
+    🎭 card says which prediction it replays, what really happened, and opens a mini chart of the original window.
+    `run_started.shifted` / `rescaled` tell the UI which case it is.
+  - Daily stock/gold fans skip weekends.
 - **Share card**: an offscreen React component (inline styles, SVG mini fan) captured with `html-to-image`.
   The Google Fonts `<link>` needs `crossorigin="anonymous"` so the fonts embed. Model line and disclaimer are
   pinned to the bottom and the headline is clamped to 3 lines.

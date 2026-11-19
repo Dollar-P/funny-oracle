@@ -65,6 +65,7 @@ export default function Replay() {
       <VerdictSection
         s={s}
         reveal={false}
+        actual={actual}
         actions={<ShowActions s={s} extra={<ShareButton prediction={p} />} />}
       />
     </div>

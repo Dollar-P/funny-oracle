@@ -79,6 +79,9 @@ export interface ShowState {
     replayOf: number | null;
     duelId: string | null;
     startedTs: number;
+    createdAt: string | null; // prediction time the chart is anchored to
+    shifted: boolean; // mock show moved to "now"
+    rescaled: boolean | null;
   } | null;
   stage: StageName | null;
   stagesSeen: StageName[];
@@ -92,7 +95,7 @@ export interface ShowState {
   sFinal: number | null;
   confidence: number | null;
   judgeTs: number | null;
-  quant: { price_now: number; p10: number; p50: number; p90: number; prob_up: number; fan: Fan; steps: number; step_label: string; target_time: string } | null;
+  quant: { price_now: number; p10: number; p50: number; p90: number; prob_up: number; fan: Fan; steps: number; step_label: string; target_time: string; created_at?: string } | null;
   cost: { run: number; runActual: number | null; total: number; totalActual: number | null; budget: number } | null;
   prediction: Prediction | null;
   predictionId: number | null;
@@ -180,6 +183,9 @@ export function reduce(s: ShowState, ev: RunEvent): ShowState {
           replayOf: ev.replay_of ?? null,
           duelId: ev.duel_id ?? null,
           startedTs: ev.ts,
+          createdAt: ev.created_at ?? null,
+          shifted: ev.mock ? ev.shifted !== false : false,
+          rescaled: ev.rescaled ?? null,
         },
       };
       return tape(s, ev, null, "🎬", `Show starts: ${ev.ticker} · ${ev.mode} · ${ev.horizon}${ev.mock ? " (mock replay)" : ""}`);
@@ -273,6 +279,7 @@ export function reduce(s: ShowState, ev: RunEvent): ShowState {
           steps: ev.steps,
           step_label: ev.step_label,
           target_time: ev.target_time,
+          created_at: ev.created_at,
         },
       };
       return tape(s, ev, null, "🎲", `Monte Carlo: P50 ${ev.p50.toFixed(2)} · P(up) ${(ev.prob_up * 100).toFixed(0)}%`);
@@ -338,6 +345,9 @@ export function showFromPrediction(p: Prediction): ShowState {
       replayOf: p.id,
       duelId: p.duel_id ?? null,
       startedTs: Date.parse(p.created_at),
+      createdAt: p.created_at,
+      shifted: false,
+      rescaled: null,
     },
     stage: "done",
     stagesSeen: ["news", "analysts", "aggregate", "debate", "judge", "quant", "done"],
@@ -356,7 +366,7 @@ export function showFromPrediction(p: Prediction): ShowState {
     sFinal: p.s_final,
     confidence: p.confidence,
     judgeTs: 0,
-    quant: { ...f, target_time: p.target_time },
+    quant: { ...f, target_time: p.target_time, created_at: p.created_at },
     prediction: p,
     predictionId: p.id,
   };

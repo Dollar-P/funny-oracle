@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,6 +20,7 @@ from core.cost import BudgetGuard
 from core.db import connect
 from mcp_server import data_sources as ds
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -80,30 +82,42 @@ def _budget_refusal(mode: str, models: list[str]) -> JSONResponse | None:
     return None
 
 
-def _live_price(ticker: str) -> float | None:
-    try:
-        return float(ds.fetch_ohlcv(ticker, "1d", "1mo")["Close"].iloc[-1])
-    except Exception:
-        return None
+def _live_price(ticker: str, interval: str = "1d") -> float | None:
+    """Last close at the interval the forecast chart draws (so the fan starts at the last live candle).
+
+    The daily close is only a fallback: it is cached for 15 min and drifts from intraday candles.
+    """
+    for iv in dict.fromkeys([interval, "1d"]):
+        try:
+            return float(ds.fetch_ohlcv(ticker, iv, None)["Close"].iloc[-1])
+        except Exception as e:
+            log.warning("live price %s %s failed: %s", ticker, iv, e)
+    return None
 
 
 def _start_mock(ticker: str, mode: str, horizon: str, models: dict | None, *, pid: int | None = None,
-                exclude: set[int] | None = None, duel_id: str | None = None, relabel: bool = True) -> Run:
+                exclude: set[int] | None = None, duel_id: str | None = None, shift: bool = True) -> Run:
+    """shift=True: a mock show happening now (relabelled, clock → now, prices rescaled to the live price).
+    shift=False: replay of the original show as it was (original time, prices and result)."""
     pid = pid if pid is not None else mock_runner.pick(ticker, mode, exclude)
     if pid is None:
         raise HTTPException(404, "no stored predictions to replay in mock mode — run one real prediction first")
     stored = mock_runner.load(pid)
     if stored is None:
         raise HTTPException(404, f"prediction {pid} not found")
-    # rescale to today's price so the fan starts at the last live candle (even for the same ticker)
-    live = _live_price(ticker) if relabel else None
-    p = mock_runner.adapt(stored, ticker if relabel else None, mode, horizon, live)
+    live = None
+    if shift:  # always rescale "now" shows to the live price at the chart's interval
+        iv = config.HORIZONS[stored.mode].get(horizon, {}).get("interval") if mode == stored.mode else None
+        live = _live_price(ticker, iv or config.HORIZONS[stored.mode][stored.horizon]["interval"])
+    p = mock_runner.adapt(stored, ticker if shift else None, mode, horizon, live, shift_clock=shift)
     if models:
         p.models = models  # the mock show pretends to run on the models the user picked
-    params = {"ticker": p.ticker, "mode": p.mode, "horizon": p.horizon, "models": models, "replay_of": pid}
+    params = {"ticker": p.ticker, "mode": p.mode, "horizon": p.horizon, "models": models, "replay_of": pid,
+              "shifted": shift}
+    rescaled = (live is not None) if shift else None
 
     async def body(run: Run):
-        await mock_runner.play(run, p, replay_of=pid, models=models)
+        await mock_runner.play(run, p, replay_of=pid, models=models, shifted=shift, rescaled=rescaled)
 
     return MANAGER.start_mock(params, body, duel_id=duel_id)
 
@@ -128,6 +142,15 @@ async def create_prediction(req: PredictionRequest, mock: int | None = Query(Non
     return {"run_id": run.run_id, "mock": is_mock}
 
 
+def _stored_models(pid: int) -> dict | None:
+    """Models from the DB columns (rows saved before R1 have none in their JSON; backfilled by the migration)."""
+    with connect() as conn:
+        row = conn.execute("SELECT analyst_model, judge_model FROM predictions WHERE id = ?", (pid,)).fetchone()
+    if row and row["analyst_model"]:
+        return {"analyst": row["analyst_model"], "judge": row["judge_model"] or row["analyst_model"]}
+    return None
+
+
 @router.post("/predictions/{pid}/replay")
 async def replay_prediction(pid: int):
     """▶ Replay the show: stream a stored prediction's events through the live view (MockRunner)."""
@@ -138,7 +161,8 @@ async def replay_prediction(pid: int):
         MANAGER.ensure_capacity(1)
     except TooManyRuns as e:
         raise HTTPException(429, str(e))
-    run = _start_mock(stored.ticker, stored.mode, stored.horizon, stored.models or None, pid=pid, relabel=False)
+    models = stored.models or _stored_models(pid)
+    run = _start_mock(stored.ticker, stored.mode, stored.horizon, models, pid=pid, shift=False)
     return {"run_id": run.run_id, "mock": True}
 
 

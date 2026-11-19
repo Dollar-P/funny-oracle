@@ -107,6 +107,10 @@ export type RunEvent = Envelope &
         mock: boolean;
         replay_of?: number | null;
         budget_thb?: number;
+        created_at?: string; // mock shows: the (possibly shifted) prediction time
+        target_time?: string;
+        shifted?: boolean; // mock show moved to "now" (false = replay of the original show as it was)
+        rescaled?: boolean | null; // shifted mock: prices rescaled to the live price?
       }
     | { type: "stage"; name: StageName }
     | { type: "agent_started"; agent: string }
@@ -130,6 +134,7 @@ export type RunEvent = Envelope &
         steps: number;
         step_label: string;
         target_time: string;
+        created_at?: string;
       }
     | {
         type: "cost_update";

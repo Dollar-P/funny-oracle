@@ -275,3 +275,77 @@ def test_autoscalp_start_stop(client, monkeypatch):
     client.post("/api/autoscalp/stop")
     sb.AUTOSCALP.thread.join(2)
     assert ticks and client.get("/api/autoscalp/status").json()["running"] is False
+
+
+# --- forecast-chart consistency ----------------------------------------------------------
+
+def test_replay_show_keeps_original_clock_prices_and_models(client, api_db):
+    pid = api_db["ids"][0]
+    stored = client.get(f"/api/predictions/{pid}").json()["prediction"]
+    rid = client.post(f"/api/predictions/{pid}/replay").json()["run_id"]
+    ev = [d for _, _, d in read_sse(client, rid)]
+    start = ev[0]
+    assert start["shifted"] is False and start["created_at"] == stored["created_at"]
+    assert start["target_time"] == stored["target_time"]
+    assert start["models"]["analyst"] == "gemini-3.5-flash-lite"            # not "stored"
+    q = next(d for d in ev if d["type"] == "quant")
+    assert q["price_now"] == pytest.approx(stored["forecast"]["price_now"])  # original price, not rescaled
+    assert q["created_at"] == stored["created_at"]
+    assert ev[-1]["prediction"]["created_at"] == stored["created_at"]
+
+
+def test_arena_mock_rescales_to_live_price_at_chart_interval(client):
+    from api.tests.conftest import synthetic_fetch
+
+    live_1m = float(synthetic_fetch("BTC-USD", "1m")["Close"].iloc[-1])
+    daily = float(synthetic_fetch("BTC-USD", "1d")["Close"].iloc[-1])
+    assert abs(live_1m - daily) > 1  # the two differ, so the test can tell which one was used
+    rid = client.post("/api/predictions", json={"ticker": "BTC-USD", "mode": "scalp", "horizon": "15m"}).json()["run_id"]
+    ev = [d for _, _, d in read_sse(client, rid)]
+    assert ev[0]["shifted"] is True and ev[0]["rescaled"] is True
+    q = next(d for d in ev if d["type"] == "quant")
+    assert q["price_now"] == pytest.approx(live_1m)
+    assert q["fan"]["p50"][0] == pytest.approx(live_1m)
+    assert abs((datetime_from(q["created_at"]) - datetime_now()).total_seconds()) < 120  # shifted to now
+
+
+def test_arena_mock_without_live_price_says_so(client, monkeypatch):
+    from mcp_server import data_sources as ds
+
+    def boom(*a, **k):
+        raise ValueError("offline")
+
+    monkeypatch.setattr(ds, "fetch_ohlcv", boom)
+    rid = client.post("/api/predictions", json={"ticker": "BTC-USD", "mode": "scalp", "horizon": "15m"}).json()["run_id"]
+    ev = [d for _, _, d in read_sse(client, rid)]
+    assert ev[0]["shifted"] is True and ev[0]["rescaled"] is False
+
+
+def test_history_window_and_coarser_fallback(client):
+    from datetime import timedelta
+
+    now = datetime_now()
+    start = (now - timedelta(hours=10)).isoformat()
+    end = (now - timedelta(hours=2)).isoformat()
+    from urllib.parse import quote
+
+    h = client.get(f"/api/history/BTC-USD?interval=1m&start={quote(start)}&end={quote(end)}").json()
+    assert h["interval"] == "1m" and h["candles"]
+    ts = [c["time"] for c in h["candles"]]
+    assert min(ts) >= int((now - timedelta(hours=10)).timestamp()) and max(ts) <= int((now - timedelta(hours=2)).timestamp())
+    # synthetic intraday data only reaches ~5 days back → 20 days ago falls back to daily bars
+    old = (now - timedelta(days=20)).isoformat()
+    h2 = client.get(f"/api/history/BTC-USD?interval=1m&start={old}").json()  # unencoded "+" also works
+    assert h2["interval"] == "1d" and h2["requested_interval"] == "1m" and len(h2["candles"]) >= 15
+
+
+def datetime_now():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
+def datetime_from(s):
+    from datetime import datetime
+
+    return datetime.fromisoformat(s)

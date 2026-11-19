@@ -57,8 +57,14 @@ def _scale_prices(p: Prediction, factor: float) -> None:
 
 
 def adapt(p: Prediction, ticker: str | None, mode: str | None, horizon: str | None,
-          live_price: float | None = None) -> Prediction:
-    """Relabel a stored prediction for the requested ticker/horizon and shift its clock to now."""
+          live_price: float | None = None, shift_clock: bool = True) -> Prediction:
+    """Relabel a stored prediction for the requested ticker/horizon.
+
+    shift_clock=True (Arena / Duel mock shows): the show happens "now", so the clock moves to now and prices
+    are rescaled to `live_price` (the caller always passes one when it can get it).
+    shift_clock=False (▶ Replay the show): the original time and prices are kept, so the chart can be
+    anchored to the original window and the real result shown without contradiction.
+    """
     p = p.model_copy(deep=True)
     if ticker:
         t = normalize(ticker)
@@ -68,6 +74,8 @@ def adapt(p: Prediction, ticker: str | None, mode: str | None, horizon: str | No
         _scale_prices(p, live_price / p.forecast.price_now)
     if mode and horizon and mode == p.mode and horizon in config.HORIZONS[mode]:
         p.horizon = horizon
+    if not shift_clock:
+        return p
     now = datetime.now(timezone.utc)
     p.created_at = now.isoformat(timespec="seconds")
     p.target_time = (now + timedelta(minutes=config.HORIZONS[p.mode][p.horizon]["minutes"])).isoformat(timespec="seconds")
@@ -83,7 +91,7 @@ def _queries(tc) -> list[str]:
 
 
 def timeline(p: Prediction, *, replay_of: int | None, models: dict | None = None,
-             seed: int = 0) -> list[tuple[float, dict]]:
+             seed: int = 0, shifted: bool = True, rescaled: bool | None = None) -> list[tuple[float, dict]]:
     """[(t_seconds, event_without_envelope)] for one show, sorted by time."""
     rng = random.Random(seed)
     out: list[tuple[float, dict]] = []
@@ -95,7 +103,8 @@ def timeline(p: Prediction, *, replay_of: int | None, models: dict | None = None
     run_models = models or p.models or {"analyst": "stored", "judge": "stored"}
     at(0, "run_started", ticker=p.ticker, asset_type=p.asset_type, mode=p.mode, horizon=p.horizon,
        models=run_models, agents=agents, weights=p.weights, est_cost_thb=0.0, mock=True, replay_of=replay_of,
-       budget_thb=config.BUDGET_THB)
+       budget_thb=config.BUDGET_THB, created_at=p.created_at, target_time=p.target_time, shifted=shifted,
+       rescaled=rescaled)
     t = 0.4
     if p.mode == "swing":
         at(t, "stage", name="news")
@@ -153,7 +162,8 @@ def timeline(p: Prediction, *, replay_of: int | None, models: dict | None = None
     at(t, "stage", name="quant")
     t += 0.6
     at(t, "quant", price_now=f.price_now, p10=f.p10, p50=f.p50, p90=f.p90, prob_up=f.prob_up, fan=f.fan,
-       steps=f.steps, step_label=f.step_label, sigma_per_step=f.sigma_per_step, target_time=p.target_time)
+       steps=f.steps, step_label=f.step_label, sigma_per_step=f.sigma_per_step, target_time=p.target_time,
+       created_at=p.created_at)
     t += 0.4
     at(t, "stage", name="done")
     at(t + 0.1, "run_done", prediction_id=replay_of, prediction=json.loads(p.model_dump_json()), mock=True)
@@ -162,11 +172,12 @@ def timeline(p: Prediction, *, replay_of: int | None, models: dict | None = None
 
 
 async def play(run, p: Prediction, *, replay_of: int | None, models: dict | None = None,
-               speed: float | None = None) -> None:
+               speed: float | None = None, shifted: bool = True, rescaled: bool | None = None) -> None:
     """Push the timeline into `run` with real (scaled) delays."""
     speed = config.MOCK_SPEED if speed is None else speed
     last = 0.0
-    for t, ev in timeline(p, replay_of=replay_of, models=models, seed=int(run.run_id[:8], 16)):
+    for t, ev in timeline(p, replay_of=replay_of, models=models, seed=int(run.run_id[:8], 16), shifted=shifted,
+                          rescaled=rescaled):
         if speed > 0 and t > last:
             await asyncio.sleep((t - last) * speed)
         last = t
