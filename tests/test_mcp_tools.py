@@ -20,17 +20,6 @@ sys.path.insert(0, str(ROOT))
 TICKERS = ["NVDA", "BTC-USD", "GC=F"]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _isolated_db(tmp_path_factory):
-    """Use a throwaway cache DB so tests don't touch data/oracle.db."""
-    import config
-
-    db = tmp_path_factory.mktemp("db") / "test.db"
-    os.environ["ORACLE_DB"] = str(db)
-    config.DB_PATH = db
-    yield
-
-
 @pytest.fixture(scope="session")
 def T():
     from mcp_server.server import TOOLS
