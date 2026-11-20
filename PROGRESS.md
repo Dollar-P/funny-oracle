@@ -25,7 +25,7 @@
 | P1 | Branch, DB migration, experiments, richer agent fields, prompts v1/v2, `MODEL_CUTOFFS` | ✅ | `tests/pro/test_p1_foundation.py` (13): v1 prompts byte-identical to `main` (sha256 per file); Arena LLM-facing JSON schemas identical to `main` (hash per schema); Arena run (Gemini fake) has v1 text, no Pro fields, no temperature; v2 run on the Gemini fake and on a mocked local backend returns scenario probs (normalised), key levels, invalidation, thesis, catalysts, no-trade reason; temperature reaches both backends; `prompt_version` / `experiment_id` stored; old-schema DB migrated additively; experiment hash stable under key order; `MODEL_CUTOFFS` env override; data-quality flags. Full suite 227 passed; `npm run build` OK |
 | P2 | Signal Engine + cost model | ✅ | `tests/pro/test_p2_signals.py` (26): bps defaults and overrides, slippage direction, fees to the cent (half-up), round-trip cost; long and short geometry + EV checked by hand (e.g. long 100 / P10 90 / P50 104 / P90 118 / ATR 4 → stop 90, R:R 1.8, cost 0.004 R, EV +0.298 R); ATR vs band stop; band edge on the wrong side ignored; scalp k=1; every FLAT rule in isolation; inclusive thresholds; EV = 0 → FLAT; costs flip EV (crypto); crypto short gate; catalyst window boundary; calibrator use; ATR uses no future bar |
 | P3 | Risk Engine | ✅ | `tests/pro/test_p3_risk.py` (14): hypothesis property test (1,000 random portfolios × plans × parameter sets; ~35 % approved, every cap seen binding) — an approved plan never exceeds risk per trade, max position, vol cap, gross, asset-class cap, open-position count, breakers or the Kelly cap; every rejection carries a known rule and a detail; a halted account never approves (100 cases); a Kelly property test (300 cases). Hand-checked sizing (0.5 % / 0.25 % risk, lot rounding down, each cap binding), breakers, duplicate ticker, correlation guard (ρ ≈ 0.99 same side → rejected only when combined risk > 1 %), Kelly only at calibration n ≥ 100, rejections written to `risk_events` |
-| P4 | Paper Broker + Ledger + trading calendar | | |
+| P4 | Paper Broker + Ledger + trading calendar | ✅ | `tests/pro/test_p4_broker.py` (23), synthetic bars with hand-computed fills: next-open entry (never the signal bar; a decision after Monday's close fills at Tuesday's 14:30 UTC open), entry gap past stop/T1 cancels, limit entry, expiry, gap through stop fills at the open (−751.85 / −1.50 R), T1 → breakeven → stop (+99.00), T2 cancels the stop (OCO), gap through targets, intrabar ambiguity = stop and 1m resolver (failure → stop), time exit, crypto fees/slippage to the cent (+384.60, costs 15.40), short mirror, MAE/MFE, 1-share T1, state round trip; ledger: equity = cash + Σ qty × mark every bar and `reconcile()` = 0.00 exactly, cash − start = Σ realised P&L; persistent account: restart never re-feeds a bar, order statuses (OCO cancelled), equity snapshot 100,204.00 reconciles with the fills; calendar: Thanksgiving, early close, DST, weekends, gold Sunday open, bar open/close times |
 | P5 | Baselines + quant backtester + metrics + stats | | |
 | P6 | Scheduler + forward paper loop + model routing and budgets | | |
 | P7 | LLM backtest mode with leakage rules + calibration | | |
@@ -71,6 +71,18 @@
   Pearson ρ of the last 60 daily returns (≥ 20 overlapping), same direction only. Kelly cap: f* = p − (1−p)/b with
   b = 0.5·R1 + 0.5·R2, active only for calibrated plans once calibration n ≥ 100; f* ≤ 0 rejects. A drawdown
   ≤ −10 % rejects with `halt=true`; the caller persists the halt until a manual reset.
+- **Paper broker** (P4, `trading/broker_paper.py`): one `Bracket` implementation shared by the forward loop
+  and the backtester. Orders fill only on a bar whose *open time* (`trading/calendar.py`: NYSE open for stock
+  daily bars, 18:00 New York the evening before for gold futures, the bar stamp otherwise) is ≥ the submit
+  time. Target (limit) fills get exactly the limit price; stops, market entries and time exits pay slippage.
+  After T1 fills inside a bar, the breakeven stop is live for the rest of that bar (conservative). An entry
+  whose fill price is already past the stop or T1 is cancelled (`gap_invalidated`). Intrabar fills are stamped
+  at the bar's close time. If half the quantity rounds to zero lots, T1 closes everything.
+- **Ledger** (P4): Decimal cents. Each fill's cash flow = notional rounded to the cent ± fee; equity marks each
+  open position at qty × mark rounded to the cent. The persistent `PaperAccount` (`trading/paper_account.py`)
+  rebuilds cash from the fills table and stores each bracket's state plus its last processed bar.
+  Callers must only feed *completed* bars (close time ≤ now): a partial bar would be skipped later.
+- **Gold hours** are approximated (Sun 18:00 → Fri 17:00 New York, daily break ignored).
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues
