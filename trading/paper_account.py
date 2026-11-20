@@ -28,14 +28,15 @@ class PaperAccount:
         self.starting = money(starting_equity)
 
     # --- orders ------------------------------------------------------------------------------------
-    def open_bracket(self, *, signal_id: int, ticker: str, asset_type: str, bracket: Bracket, now: datetime) -> int:
+    def open_bracket(self, *, signal_id: int, ticker: str, asset_type: str, bracket: Bracket, now: datetime,
+                     meta: dict | None = None) -> int:
         with connect() as conn:
             cur = conn.execute(
                 "INSERT INTO positions (signal_id, experiment_id, ticker, asset_type, side, qty, qty_open, stop,"
                 " targets_json, time_exit, state_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (signal_id, self.experiment_id, ticker, asset_type, bracket.side, bracket.qty, 0.0, bracket.stop,
                  json.dumps(bracket.targets), _iso(bracket.time_exit),
-                 json.dumps({"bracket": bracket.to_state(), "last_bar": None})))
+                 json.dumps({"bracket": bracket.to_state(), "last_bar": None, "meta": meta or {}})))
             pid = int(cur.lastrowid)
             buy = bracket.side == "long"
             close_side = "sell" if buy else "buy"
@@ -87,7 +88,7 @@ class PaperAccount:
                 if b.state in ("closed", "cancelled"):
                     break
             if new_fills or b.state in ("closed", "cancelled") or last is not None:
-                events += self._persist(row["id"], row["signal_id"], ticker, b, new_fills, last)
+                events += self._persist(row["id"], row["signal_id"], ticker, b, new_fills, last, st.get("meta"))
         return events
 
     def cancel_pending(self, pid: int, reason: str) -> list[dict]:
@@ -97,7 +98,7 @@ class PaperAccount:
         b = Bracket.from_state(st["bracket"])
         b.cancel(reason)
         return self._persist(pid, row["signal_id"], row["ticker"], b, [],
-                             datetime.fromisoformat(st["last_bar"]) if st["last_bar"] else None)
+                             datetime.fromisoformat(st["last_bar"]) if st["last_bar"] else None, st.get("meta"))
 
     def force_close(self, pid: int, ts: datetime, price: float, reason: str = "manual") -> list[dict]:
         with connect() as conn:
@@ -106,10 +107,10 @@ class PaperAccount:
         b = Bracket.from_state(st["bracket"])
         fills = b.close_at(ts, price, reason)
         return self._persist(pid, row["signal_id"], row["ticker"], b, fills,
-                             datetime.fromisoformat(st["last_bar"]) if st["last_bar"] else None)
+                             datetime.fromisoformat(st["last_bar"]) if st["last_bar"] else None, st.get("meta"))
 
     def _persist(self, pid: int, signal_id: int, ticker: str, b: Bracket, new_fills: list[Fill],
-                 last: datetime | None) -> list[dict]:
+                 last: datetime | None, meta: dict | None = None) -> list[dict]:
         events: list[dict] = []
         group = f"pos-{pid}"
         with connect() as conn:
@@ -141,7 +142,7 @@ class PaperAccount:
                 (_iso(b.opened_at), _iso(b.closed_at), b.qty_open, b.entry_price, b.avg_exit(), b.stop,
                  float(b.realized_pnl()) if b.state == "closed" else None, b.r_multiple(), b.mae, b.mfe,
                  float(b.costs_paid()), b.exit_reason or b.cancel_reason,
-                 json.dumps({"bracket": b.to_state(), "last_bar": _iso(last)}), pid))
+                 json.dumps({"bracket": b.to_state(), "last_bar": _iso(last), "meta": meta or {}}), pid))
         if b.state == "closed":
             events.append({"type": "position_closed", "position_id": pid, "signal_id": signal_id, "ticker": ticker,
                            "exit_reason": b.exit_reason, "realized_pnl": float(b.realized_pnl()),

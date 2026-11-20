@@ -2,8 +2,8 @@
 
 - stock:  NYSE sessions (pandas_market_calendars "XNYS": holidays, early closes, DST).
 - crypto: 24/7.
-- gold:   GC=F on CME Globex, approximated as Sunday 18:00 → Friday 17:00 New York time (the daily 17:00–18:00
-          maintenance break is ignored; yfinance bars decide which bars exist).
+- gold:   GC=F on CME Globex: Sunday 18:00 → Friday 17:00 New York time with a daily 17:00–18:00 break
+          (exchange holidays are not modelled; yfinance bars decide which bars exist).
 
 `bar_open_time` maps a bar timestamp to the moment its first trade happened. yfinance stamps daily bars at
 midnight New York (stocks, gold) or midnight UTC (crypto); the real open is the NYSE open for stocks and
@@ -69,7 +69,7 @@ def is_open(asset_type: str, ts) -> bool:
     if asset_type == "stock":
         s = nyse_session(t.astimezone(NY))
         return s is not None and s[0] <= t < s[1]
-    ny = t.astimezone(NY)  # gold: Sun 18:00 → Fri 17:00 New York
+    ny = t.astimezone(NY)  # gold: Sun 18:00 → Fri 17:00 New York, daily break 17:00–18:00
     wd, hm = ny.weekday(), (ny.hour, ny.minute)
     if wd == 5:
         return False
@@ -77,7 +77,7 @@ def is_open(asset_type: str, ts) -> bool:
         return hm >= (18, 0)
     if wd == 4:
         return hm < (17, 0)
-    return True
+    return not ((17, 0) <= hm < (18, 0))
 
 
 def next_open(asset_type: str, ts) -> datetime:
@@ -94,7 +94,9 @@ def next_open(asset_type: str, ts) -> datetime:
             if s and s[0] < t < s[1]:
                 return t
         raise RuntimeError("no NYSE session within 15 days")
-    ny = t.astimezone(NY)  # gold: closed Fri 17:00 → Sun 18:00
+    ny = t.astimezone(NY)  # gold: daily break (Mon–Thu 17:00–18:00) or the weekend (Fri 17:00 → Sun 18:00)
+    if ny.weekday() < 4 or (ny.weekday() == 6 and ny.hour >= 17):
+        return datetime.combine(ny.date(), time(18, 0), tzinfo=NY).astimezone(UTC)
     days_to_sun = (6 - ny.weekday()) % 7
     sunday = datetime.combine(ny.date() + timedelta(days=days_to_sun), time(18, 0), tzinfo=NY)
     return sunday.astimezone(UTC)

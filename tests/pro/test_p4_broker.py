@@ -94,9 +94,16 @@ def test_t1_then_breakeven_and_oco():
 def test_t2_cancels_the_stop():
     b = long_bracket()
     b.on_bar(bar(1, 100, 101, 99, 100))
-    fills = b.on_bar(bar(2, 101, 120, 100.5, 119))
-    assert roles(fills) == ["t1", "t2"] and [f.qty for f in fills] == [25, 25] and b.exit_reason == "t2"
-    assert b.on_bar(bar(3, 50, 50, 40, 45)) == []
+    # T1 and T2 both inside one bar: only T1 — the path after an intrabar T1 is unknown
+    assert roles(b.on_bar(bar(2, 101, 120, 100.5, 119))) == ["t1"] and b.qty_open == 25
+    (t2,) = b.on_bar(bar(3, 110, 121, 99, 120))                    # next bar: BE stop (low 99) and T2 both inside
+    assert t2.role == "stop"                                       # → the stop is assumed first
+    b = long_bracket()
+    b.on_bar(bar(1, 100, 101, 99, 100))
+    b.on_bar(bar(2, 101, 120, 100.5, 119))
+    (t2,) = b.on_bar(bar(3, 110, 121, 109, 120))
+    assert t2.role == "t2" and t2.qty == 25 and b.exit_reason == "t2"
+    assert b.on_bar(bar(4, 50, 50, 40, 45)) == []                  # OCO: the stop is gone
 
 
 def test_gap_through_targets_fills_at_the_better_open():
@@ -104,6 +111,11 @@ def test_gap_through_targets_fills_at_the_better_open():
     b.on_bar(bar(1, 100, 101, 99, 100))
     fills = b.on_bar(bar(2, 120, 121, 119, 120))
     assert roles(fills) == ["t1", "t2"] and all(f.price == 120 for f in fills)
+    b = long_bracket()
+    b.on_bar(bar(1, 100, 101, 99, 100))
+    # gap through T1 at the open: the rest of the bar comes after, so the breakeven stop is live intrabar
+    fills = b.on_bar(bar(2, 105, 106, 99, 100))
+    assert roles(fills) == ["t1", "stop"] and fills[0].price == 105 and fills[1].raw_price == pytest.approx(100.02)
 
 
 def test_intrabar_ambiguity_assumes_stop():
@@ -120,8 +132,10 @@ def test_intrabar_ambiguity_resolved_by_minute_bars():
     b = long_bracket()
     b.on_bar(bar(1, 100, 101, 99, 100))
     fills = b.on_bar(bar(2, 100, 105, 89, 100), resolver=minute_resolver(minutes))
-    # T1 first, then the breakeven stop is live for the rest of the bar and the low reaches it
-    assert roles(fills) == ["t1", "stop"] and fills[1].raw_price == pytest.approx(100.02)
+    # T1 first; the breakeven stop applies from the next bar
+    assert roles(fills) == ["t1"] and b.stop == pytest.approx(100.02)
+    (st,) = b.on_bar(bar(3, 99, 100, 95, 96))                      # opens below breakeven → gap fill at the open
+    assert st.role == "stop" and st.raw_price == 99
     b2 = long_bracket()
     b2.on_bar(bar(1, 100, 101, 99, 100))
     failing = minute_resolver(lambda s, e: (_ for _ in ()).throw(RuntimeError("no 1m data")))
@@ -141,7 +155,8 @@ def test_fees_and_slippage_crypto_to_the_cent():
     (e,) = b.on_bar(bar(1, 60_000, 60_500, 59_800, 60_200))
     assert e.price == pytest.approx(60_030.0) and e.notional == D("6003.00") and e.fee == D("6.00")
     assert e.slippage == D("3.00")
-    t1, t2 = b.on_bar(bar(2, 61_000, 66_500, 60_500, 66_200))
+    (t1,) = b.on_bar(bar(2, 61_000, 62_500, 60_500, 62_200))
+    (t2,) = b.on_bar(bar(3, 62_300, 66_500, 62_100, 66_200))
     assert (t1.qty, t1.notional, t1.fee) == (0.05, D("3100.00"), D("3.10"))
     assert (t2.qty, t2.notional, t2.fee) == (0.05, D("3300.00"), D("3.30"))
     assert b.realized_pnl() == D("384.60")                     # 3100 + 3300 − 6003 − 6.00 − 3.10 − 3.30
@@ -249,6 +264,8 @@ def test_calendar_nyse_holidays_weekends_and_dst():
 def test_calendar_gold_and_bar_open_times():
     assert not cal.is_open("gold", datetime(2026, 11, 21, 12, 0, tzinfo=UTC))          # Saturday
     assert cal.is_open("gold", datetime(2026, 11, 23, 0, 0, tzinfo=UTC))               # Sunday 19:00 NY
+    assert not cal.is_open("gold", datetime(2026, 11, 24, 22, 30, tzinfo=UTC))         # Tue 17:30 NY: daily break
+    assert cal.next_open("gold", datetime(2026, 11, 24, 22, 30, tzinfo=UTC)) == datetime(2026, 11, 24, 23, 0, tzinfo=UTC)
     assert cal.next_open("gold", datetime(2026, 11, 21, 12, 0, tzinfo=UTC)) == datetime(2026, 11, 22, 23, 0, tzinfo=UTC)
     stock_bar = datetime(2026, 11, 18, 5, 0, tzinfo=UTC)                               # yfinance daily stamp
     assert cal.bar_open_time("stock", "1d", stock_bar) == datetime(2026, 11, 18, 14, 30, tzinfo=UTC)

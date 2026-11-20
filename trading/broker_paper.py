@@ -13,7 +13,11 @@ Rules
 - Gaps: a stop gapped through fills at the open (worse); a target gapped through fills at the open (better,
   as a resting limit would).
 - Intrabar ambiguity: stop and target both inside one bar → the stop is assumed first, unless a resolver
-  (1m bars) says otherwise. After T1 fills inside a bar, the breakeven stop is live for the rest of that bar.
+  (1m bars) says otherwise. After T1 fills *inside* a bar, nothing else happens in that bar: the intrabar path
+  after T1 is unknown, and since every bar's low is ≤ its open ≤ the entry fill, a breakeven stop live in the
+  same bar would stop out every trade that reaches T1 on its entry bar (a bias, not conservatism). The
+  breakeven stop and T2 apply from the next bar. After a gap through T1 at the *open*, the rest of the bar is
+  known to come later, so the breakeven stop and T2 are checked intrabar as usual.
 - Time exit: at the open of the first bar whose open time is ≥ time_exit (market, with slippage).
 - Prices: stops, market entries and time exits pay slippage; target (limit) fills get exactly the limit.
   Fees are charged on every fill's notional (cents, half-up).
@@ -232,7 +236,10 @@ class Bracket:
                 self.mfe = max(self.mfe, self._favourable(tgt))
                 if not hit_stop:
                     self.mae = max(self.mae, self._adverse(lo_adv))
+                was_t1 = not self.t1_done
                 self._take_target(bar.t_close, tgt)
+                if was_t1:
+                    break  # path after an intrabar T1 is unknown: breakeven stop and T2 from the next bar
         return self.fills[n0:]
 
     def close_at(self, ts: datetime, price: float, reason: str = "end") -> list[Fill]:
