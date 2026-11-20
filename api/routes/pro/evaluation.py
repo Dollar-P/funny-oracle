@@ -16,6 +16,8 @@ _RUNNING: dict = {"busy": False, "error": None}
 
 
 def _history():
+    if pro_state.demo_dir() is not None:
+        pro_state._demo()
     hist = pro_state._STATE.get("history")
     if hist is not None:
         return hist

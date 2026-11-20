@@ -49,6 +49,8 @@ def test_engine_reconciles_and_trades_close():
     # every position is closed at the end → final equity = start + Σ realised P&L (to the cent)
     assert money(r.equity.iloc[-1]) == money(100_000 + sum(t["pnl"] for t in r.trades))
     assert all(t["opened_at"] >= t["decided_at"] for t in r.trades)      # fills at/after the decision bar's close
+    assert r.equity.index[0].date().isoformat() >= CFG.start                # warm-up is not measured
+    assert len(r.equity) == len(buy_and_hold(data, CFG).equity)              # same period as the benchmark
     s = r.summary()
     assert s["trades"] == len(r.trades) and -1 < s["max_drawdown"] <= 0 and s["total_costs"] > 0
     assert set(s) >= {"sharpe", "sortino", "calmar", "expectancy_r", "profit_factor", "exposure", "turnover"}

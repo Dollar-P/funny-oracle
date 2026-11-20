@@ -31,6 +31,19 @@
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
 
   --radius-card: 16px;
+
+  /* Desk (PRO.md §7): calm dark neutral, one accent, green/red only for P&L and direction */
+  --color-desk-bg: #0e1013;
+  --color-desk-panel: #15181d;
+  --color-desk-panel-2: #1b1f26;
+  --color-desk-line: #262b33;
+  --color-desk-ink: #e4e7eb;
+  --color-desk-dim: #9aa3ae;
+  --color-desk-faint: #6b7480;
+  --color-desk-accent: #5b9cff;
+  --color-desk-up: #2fb874;
+  --color-desk-down: #e5535b;
+  --color-desk-warn: #d9a441;
   --shadow-glow: 0 0 0 1px rgb(167 139 250 / 0.35), 0 0 24px rgb(109 40 217 / 0.35);
   --shadow-glow-gold: 0 0 0 1px rgb(250 204 21 / 0.5), 0 0 32px rgb(250 204 21 / 0.35);
 }
@@ -63,6 +76,12 @@
 @utility num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+@utility panel {
+  background: var(--color-desk-panel);
+  border: 1px solid var(--color-desk-line);
+  border-radius: 8px;
 }
 
 @utility card {
@@ -145,3 +164,19 @@
 
 /* thin scrollbars on dark */
 * { scrollbar-width: thin; scrollbar-color: #2a2a4a transparent; }
+
+/* --- Desk ------------------------------------------------------------------------------------------- */
+.desk { background: var(--color-desk-bg); color: var(--color-desk-ink); min-height: 100vh; }
+.desk :focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 1px; border-radius: 4px; }
+.desk table.dt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.desk table.dt th { text-align: left; font-weight: 500; color: var(--color-desk-dim); padding: 6px 8px;
+  border-bottom: 1px solid var(--color-desk-line); white-space: nowrap; position: sticky; top: 0;
+  background: var(--color-desk-panel); }
+.desk table.dt td { padding: 5px 8px; border-bottom: 1px solid var(--color-desk-line); white-space: nowrap;
+  vertical-align: top; }
+.desk table.dt td.wrap { white-space: normal; min-width: 14rem; }
+.desk table.dt tr:hover td { background: rgb(255 255 255 / 0.02); }
+.desk table.dt td.r, .desk table.dt th.r { text-align: right; }
+.desk .flash td { animation: desk-flash 2.4s ease-out; }
+@keyframes desk-flash { from { background: rgb(91 156 255 / 0.16); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .desk .flash td { animation: none; } }

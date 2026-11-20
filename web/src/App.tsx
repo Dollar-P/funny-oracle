@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import Toasts from "./components/Toasts";
 import Arena from "./pages/Arena";
@@ -9,12 +9,24 @@ import { DISCLAIMER } from "./lib/cast";
 const Duel = lazy(() => import("./pages/Duel"));
 const HallOfFame = lazy(() => import("./pages/HallOfFame"));
 const Replay = lazy(() => import("./pages/Replay"));
+// The Desk (PRO.md §7) is a separate, calm layout; lazy-loaded so the Arena bundle is unchanged
+const DeskApp = lazy(() => import("./pro/DeskApp"));
 
 function Loading() {
   return <div className="py-24 text-center text-ink-dim">🔮 Warming up the stage…</div>;
 }
 
 export default function App() {
+  const { pathname } = useLocation();
+  if (pathname === "/pro" || pathname.startsWith("/pro/")) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#0e1013]" />}>
+        <Routes>
+          <Route path="/pro/*" element={<DeskApp />} />
+        </Routes>
+      </Suspense>
+    );
+  }
   return (
     <div className="min-h-screen flex flex-col">
       <div className="stage-bg" aria-hidden="true" />

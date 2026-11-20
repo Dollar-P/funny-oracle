@@ -195,3 +195,11 @@ def test_arena_routes_untouched(pro):
     assert c.get("/api/health").json()["ok"] is True
     assert c.get("/api/models").status_code == 200
     assert c.get("/api/pro/nope").status_code == 404
+
+
+def test_bars_endpoint_returns_completed_bars_only(pro):
+    c = pro["client"]
+    out = c.get("/api/pro/bars/AAA?limit=50").json()
+    assert out["asset_type"] == "stock" and len(out["candles"]) == 50
+    last = datetime.fromtimestamp(out["candles"][-1]["t"], UTC)
+    assert last.date() <= pro["clock"].t.date()          # nothing after the (simulated) now

@@ -224,3 +224,21 @@ def overview():
         "risk_limits": {"max_dd": s["risk"]["max_dd"], "daily_loss": s["risk"]["daily_loss"]},
         "as_of": t.isoformat(timespec="seconds"),
     }
+
+
+@router.get("/bars/{ticker}")
+def bars(ticker: str, asset_type: str | None = None, interval: str = "1d", limit: int = 260):
+    """Completed bars from the Desk's bar source (synthetic in demo mode) for the trade chart."""
+    s = pro_settings.load()
+    a = asset_type or next((w["asset_type"] for w in s["watchlist"] if w["ticker"] == ticker), None)
+    if a is None:
+        from core.asset import classify
+
+        a = classify(ticker)
+    df = pro_state.desk().bars(ticker, a, interval, now())
+    if df is None or not len(df):
+        return {"ticker": ticker, "candles": []}
+    df = df.tail(limit)
+    return {"ticker": ticker, "asset_type": a, "interval": interval,
+            "candles": [{"t": int(ts.timestamp()), "o": float(r.Open), "h": float(r.High), "l": float(r.Low),
+                         "c": float(r.Close)} for ts, r in zip(df.index, df.itertuples())]}

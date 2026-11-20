@@ -63,11 +63,38 @@ BUS = EventBus()
 _STATE: dict = {}
 
 
+def demo_dir():
+    """PRO_DEMO_DIR (scripts/pro_demo.py output): synthetic bars + a frozen clock, no LLM, no network."""
+    import os
+    from pathlib import Path
+
+    d = os.getenv("PRO_DEMO_DIR")
+    return Path(d) if d else None
+
+
+def _demo() -> dict:
+    if "demo" not in _STATE:
+        import json
+
+        from trading import demo
+
+        d = demo_dir()
+        meta = json.loads((d / "demo.json").read_text())
+        bars = demo.DemoBars(demo.load_bars(d / "bars"))
+        _STATE["demo"] = {"bars": bars, "now": datetime.fromisoformat(meta["now"])}
+        _STATE.setdefault("history", bars.history)
+    return _STATE["demo"]
+
+
 def clock() -> datetime:
+    if demo_dir() is not None:
+        return _demo()["now"]
     return datetime.now(UTC)
 
 
 def local_available() -> bool:
+    if demo_dir() is not None:
+        return False
     from api.routes.models import local_server_models
 
     ids, _err = local_server_models()
@@ -76,7 +103,6 @@ def local_available() -> bool:
 
 def desk():
     if "desk" not in _STATE:
-        from agents.reviewer import cheapest_gemini  # noqa: F401  (import check)
         from evaluation.calibration import calibrator_for
         from trading.desk import Desk, default_reviewer
         from trading import scheduler as S
@@ -86,8 +112,14 @@ def desk():
             s = pro_settings.load()
             return S.spent_today_thb(clock()) < float(s["budgets"]["daily_thb"])
 
-        _STATE["desk"] = Desk(emit=BUS.publish, calibrator_for=calibrator_for(clock),
-                              reviewer=default_reviewer(local_available, budget_ok=budget_ok))
+        if demo_dir() is not None:
+            from trading import demo
+
+            _STATE["desk"] = Desk(bars=_demo()["bars"], emit=BUS.publish, calibrator_for=calibrator_for(clock),
+                                  reviewer=demo.demo_review)
+        else:
+            _STATE["desk"] = Desk(emit=BUS.publish, calibrator_for=calibrator_for(clock),
+                                  reviewer=default_reviewer(local_available, budget_ok=budget_ok))
     return _STATE["desk"]
 
 
@@ -95,7 +127,12 @@ def scheduler():
     if "scheduler" not in _STATE:
         from trading.scheduler import Scheduler, orchestrator_runner
 
-        _STATE["scheduler"] = Scheduler(desk=desk(), runner=orchestrator_runner, clock=clock,
+        runner = orchestrator_runner
+        if demo_dir() is not None:
+            from trading import demo
+
+            runner = demo.DemoRunner(_demo()["bars"], clock)
+        _STATE["scheduler"] = Scheduler(desk=desk(), runner=runner, clock=clock,
                                         local_available=local_available, emit=BUS.publish)
     return _STATE["scheduler"]
 

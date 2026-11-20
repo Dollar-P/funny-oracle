@@ -243,9 +243,10 @@ def run_backtest(strategy: Strategy, data: dict[str, tuple[str, pd.DataFrame]] |
         marks = {k: last_close[key_ticker[k]] for k in led.qty}
         snap_ts = datetime.combine(d, datetime.min.time(), tzinfo=UTC)
         snap = led.snapshot(snap_ts, marks)
-        eq_ts.append(snap_ts)
-        eq_v.append(float(snap.equity))
-        in_mkt.append(1 if led.qty else 0)
+        if start is None or d >= start:  # warm-up bars are not part of the measured period
+            eq_ts.append(snap_ts)
+            eq_v.append(float(snap.equity))
+            in_mkt.append(1 if led.qty else 0)
         day_start = prev_equity
         prev_equity = snap.equity
         if float(snap.drawdown) <= cfg.risk.max_dd:
