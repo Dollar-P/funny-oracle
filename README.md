@@ -18,7 +18,6 @@
 
 ## Table of contents
 
-0. [Screenshots](#0-screenshots)
 1. [The core idea](#1-the-core-idea)
 2. [How it works — the big picture](#2-how-it-works--the-big-picture)
 3. [One prediction, step by step](#3-one-prediction-step-by-step)
@@ -40,30 +39,7 @@
 10. [Tests](#10-tests)
 11. [Design documents](#11-design-documents)
 12. [Disclaimer & license](#12-disclaimer--license)
-
----
-
-## 0. Screenshots
-
-### 🎪 The Oracle Arena (web UI)
-
-| Live show | Verdict |
-|---|---|
-| ![](docs/arena_live_real.png) | ![](docs/arena_verdict_real.png) |
-| **Model vs Model** | **Hall of Fame** |
-| ![](docs/duel_real.png) | ![](docs/hall_of_fame.png) |
-| **Setup** | **Share card** |
-| ![](docs/arena_setup.png) | <img src="docs/share_card.png" width="320"> |
-
-More: [debate](docs/arena_debate_real.png) · [agent drawer](docs/agent_drawer_real.png) · [replay page](docs/replay.png) · [phone](docs/mobile_arena.png)
-
-The Desk (Pro mode) screenshot is in [§4.9](#49-pro-mode--the-desk-trading-evaluation).
-
-### Streamlit fallback
-
-| Swing · Gold (light) | Swing · Gold (dark) | Scalp · BTC 15m |
-|---|---|---|
-| ![](docs/predict_gold_swing_light.png) | ![](docs/predict_gold_swing_dark.png) | ![](docs/predict_btc_scalp.png) |
+0. [Screenshots](#0-screenshots)
 
 ---
 
@@ -667,3 +643,29 @@ node web/e2e/pro.mjs <url> <outDir>
 Funny Oracle is an **educational toy and research tool**. Its predictions are for fun and for studying how LLM agents behave — they are **not investment advice**, and the most likely honest result is that the system does not beat simple baselines after costs. Pro mode trades paper money only.
 
 MIT License — see [`LICENSE`](LICENSE).
+
+---
+
+## 0. Screenshots
+
+### 🎪 The Oracle Arena (web UI)
+
+| Live show | Verdict |
+|---|---|
+| ![](docs/arena_live_real.png) | ![](docs/arena_verdict_real.png) |
+| **Model vs Model** | **Hall of Fame** |
+| ![](docs/duel_real.png) | ![](docs/hall_of_fame.png) |
+| **Setup** | **Share card** |
+| ![](docs/arena_setup.png) | <img src="docs/share_card.png" width="320"> |
+
+More: [debate](docs/arena_debate_real.png) · [agent drawer](docs/agent_drawer_real.png) · [replay page](docs/replay.png) · [phone](docs/mobile_arena.png)
+
+The Desk (Pro mode) screenshot is in [§4.9](#49-pro-mode--the-desk-trading-evaluation).
+
+### Streamlit fallback
+
+| Swing · Gold (light) | Swing · Gold (dark) | Scalp · BTC 15m |
+|---|---|---|
+| ![](docs/predict_gold_swing_light.png) | ![](docs/predict_gold_swing_dark.png) | ![](docs/predict_btc_scalp.png) |
+
+---
