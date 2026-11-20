@@ -16,11 +16,11 @@ from typing import Callable
 
 import config
 from agents import REGISTRY
-from agents.base import Context
+from agents.base import Context, is_pro, load_prompt
 from agents.debate import run_debate
 from agents.judge import Judge
 from agents.news_researcher import NewsResearcher
-from core import cost, scoreboard
+from core import cost, data_quality, scoreboard
 from core.asset import classify, normalize
 from core.cost import BudgetGuard
 from core.events import NULL_SINK, EventSink, OnEvent
@@ -131,19 +131,24 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
                          save: bool = True, seed: int | None = None,
                          on_event: OnEvent | None = None, analyst_model: str | None = None,
                          judge_model: str | None = None, run_id: str | None = None,
-                         duel_id: str | None = None, think_preset: str | None = None) -> Prediction:
+                         duel_id: str | None = None, think_preset: str | None = None,
+                         prompt_version: str = "v1", temperature: float | None = None,
+                         experiment_id: int | None = None) -> Prediction:
     """One prediction end to end.
 
     on_event: async callback receiving every run event (REDESIGN §2.2); None → no events.
     analyst_model / judge_model: per-run override; None → the model from .env for that role.
     think_preset: local models only — "quick" (thinking off) or "deep" (LOCAL_LLM.md policy).
+    prompt_version / temperature / experiment_id: Pro mode (PRO.md §3.1, §6.4). The defaults ("v1", provider
+    default temperature, no experiment) are exactly the Arena's behaviour.
     """
     run_id = run_id or uuid.uuid4().hex
     events = EventSink(on_event, run_id)
     try:
         return await _run(ticker, mode, horizon, progress=progress, source=source, llm=llm, executor=executor,
                           save=save, seed=seed, events=events, analyst_model=analyst_model,
-                          judge_model=judge_model, run_id=run_id, duel_id=duel_id, think_preset=think_preset)
+                          judge_model=judge_model, run_id=run_id, duel_id=duel_id, think_preset=think_preset,
+                          prompt_version=prompt_version, temperature=temperature, experiment_id=experiment_id)
     except cost.BudgetExceeded as e:
         await events.emit("error", message=str(e), fatal=True, kind="budget")
         raise
@@ -153,7 +158,8 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
 
 
 async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, seed, events: EventSink,
-               analyst_model, judge_model, run_id, duel_id, think_preset=None) -> Prediction:
+               analyst_model, judge_model, run_id, duel_id, think_preset=None, prompt_version="v1",
+               temperature=None, experiment_id=None) -> Prediction:
     t0 = time.perf_counter()
     say = progress or (lambda m: log.info(m))
     _validate(mode, horizon)
@@ -162,9 +168,13 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     hz = config.HORIZONS[mode][horizon]
     if llm is None:
         provider = config.provider_for(analyst_model) if analyst_model else None
-        llm = LLM(provider=provider, run_id=run_id, think_preset=think_preset)
-    elif think_preset:
-        llm.think_preset = think_preset
+        llm = LLM(provider=provider, run_id=run_id, think_preset=think_preset, temperature=temperature)
+    else:
+        if think_preset:
+            llm.think_preset = think_preset
+        if temperature is not None:
+            llm.temperature = temperature
+    load_prompt("_analyst", prompt_version)  # unknown prompt version → ValueError before any API call
     llm.run_id = run_id
     local = llm.provider == "local"
     if local and mode == "scalp":
@@ -204,8 +214,12 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     if mode == "scalp":
         sigma, sigma_source = await _scalp_sigma(ticker, horizon, hz["minutes"], steps, sigma, sigma_source)
     say(f"σ per step {sigma:.5f} ({sigma_source})")
+    degraded = data_quality.check(px, mode, hz["interval"], asset) if is_pro(prompt_version) else []
+    if degraded:
+        say(f"Data quality: degraded ({', '.join(degraded)})")
 
-    ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"])
+    ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"],
+                  prompt_version=prompt_version)
 
     async def run_one(ag) -> AgentReport:
         if agent_slots is not None:
@@ -301,6 +315,7 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
         cost_actual_usd=cost.run_cost_actual(run_id),
         elapsed_s=round(time.perf_counter() - t0, 1), search_mode=search_mode,
         models=models, run_id=run_id, duel_id=duel_id, think_preset=llm.think_preset if local else None,
+        prompt_version=prompt_version, temperature=llm.temperature, experiment_id=experiment_id, degraded=degraded,
     )
     if save:                                                                            # [8]
         scoreboard.save(pred, run_id, source)

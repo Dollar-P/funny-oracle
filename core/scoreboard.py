@@ -35,9 +35,9 @@ def save(pred: Prediction, run_id: str, source: str = "manual") -> int:
         pid = int(cur.lastrowid)
         pred.id = pid
         conn.execute("UPDATE predictions SET prediction_json = ?, analyst_model = ?, judge_model = ?, duel_id = ?,"
-                     " cost_actual_usd = ? WHERE id = ?",
+                     " cost_actual_usd = ?, prompt_version = ?, experiment_id = ? WHERE id = ?",
                      (pred.model_dump_json(), pred.models.get("analyst"), pred.models.get("judge"), pred.duel_id,
-                      pred.cost_actual_usd, pid))
+                      pred.cost_actual_usd, pred.prompt_version, pred.experiment_id, pid))
         conn.executemany(
             "INSERT INTO agent_outputs (prediction_id, agent, score, confidence, reasoning, trace_json, error)"
             " VALUES (?,?,?,?,?,?,?)",

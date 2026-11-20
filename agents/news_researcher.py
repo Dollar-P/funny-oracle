@@ -38,7 +38,7 @@ class NewsResearcher:
                            "Cite the urls you used in links.")
         else:
             source_rule = f'Use the get_news tool (ticker "{ctx.ticker}"; for macro context also try "^GSPC" or "GC=F").' 
-        system = render(load_prompt("news_researcher"), ticker=ctx.ticker, asset_type=ctx.asset_type,
+        system = render(load_prompt("news_researcher", ctx.prompt_version), ticker=ctx.ticker, asset_type=ctx.asset_type,
                         horizon=ctx.horizon, now=ctx.now, source_rule=source_rule)
         res = await self.llm.run_agent(
             agent=self.name, system=system, user=f"Research news for {ctx.ticker}.", schema=NewsBrief,

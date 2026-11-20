@@ -1,4 +1,8 @@
-"""BaseAgent: loads prompts from agents/prompts/*.md and runs the LLM agent loop."""
+"""BaseAgent: loads prompts from agents/prompts/<version>/*.md and runs the LLM agent loop.
+
+Prompt versions (PRO.md §3.1): v1 = the Arena's prompts (unchanged), v2 = Pro / Desk prompts. The version is
+stored with every prediction.
+"""
 from __future__ import annotations
 
 import re
@@ -8,7 +12,7 @@ from pathlib import Path
 
 import config
 from core.llm import LLM, AgentResult, ToolExecutor
-from core.schemas import AgentOutput, AgentReport, NewsBrief
+from core.schemas import AgentOutput, AgentOutputPro, AgentReport, NewsBrief
 
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 METHODS_DIR = config.ROOT / "methods"     # §10.3 extension point (empty in v1)
@@ -23,13 +27,26 @@ def render(template: str, **values) -> str:
     return template.format_map(_SafeDict(**{k: ("" if v is None else v) for k, v in values.items()}))
 
 
-def load_prompt(name: str) -> str:
-    return (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+DEFAULT_PROMPT_VERSION = "v1"
 
 
-def focus_for(name: str, asset_type: str) -> str:
-    """Pick the '## <asset_type>' section of agents/prompts/<name>.md."""
-    text = load_prompt(name)
+def prompt_versions() -> list[str]:
+    return sorted(p.name for p in PROMPTS.iterdir() if p.is_dir() and p.name.startswith("v"))
+
+
+def load_prompt(name: str, version: str = DEFAULT_PROMPT_VERSION) -> str:
+    if version not in prompt_versions():
+        raise ValueError(f"unknown prompt version {version!r} (have {prompt_versions()})")
+    return (PROMPTS / version / f"{name}.md").read_text(encoding="utf-8")
+
+
+def is_pro(version: str) -> bool:
+    return version != DEFAULT_PROMPT_VERSION
+
+
+def focus_for(name: str, asset_type: str, version: str = DEFAULT_PROMPT_VERSION) -> str:
+    """Pick the '## <asset_type>' section of agents/prompts/<version>/<name>.md."""
+    text = load_prompt(name, version)
     sections = dict(re.findall(r"^## (\w+)\s*\n(.*?)(?=^## |\Z)", text, flags=re.S | re.M))
     return sections.get(asset_type, "").strip()
 
@@ -55,10 +72,12 @@ class Context:
     interval: str                # data interval for this horizon
     news: NewsBrief | None = None
     methods: dict[str, list[str]] = field(default_factory=dict)
+    prompt_version: str = DEFAULT_PROMPT_VERSION
+    as_of: datetime | None = None   # backtest mode: the decision time (PRO.md §6.2); None = live
 
     @property
     def now(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return (self.as_of or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
 
 
 class BaseAgent:
@@ -79,9 +98,9 @@ class BaseAgent:
 
     def system_prompt(self, ctx: Context) -> str:
         return render(
-            load_prompt("_analyst"),
+            load_prompt("_analyst", ctx.prompt_version),
             role=self.role, ticker=ctx.ticker, asset_type=ctx.asset_type, mode=ctx.mode, horizon=ctx.horizon,
-            now=ctx.now, focus=focus_for(self.name, ctx.asset_type), max_turns=self.max_turns,
+            now=ctx.now, focus=focus_for(self.name, ctx.asset_type, ctx.prompt_version), max_turns=self.max_turns,
             context=method_context(self.name, ctx.methods.get(self.name)),
             search_rule=" or Google Search results" if self.enable_search else "",
         )
@@ -101,7 +120,8 @@ class BaseAgent:
 
     async def run(self, ctx: Context) -> AgentReport:
         res: AgentResult = await self.llm.run_agent(
-            agent=self.name, system=self.system_prompt(ctx), user=self.user_prompt(ctx), schema=AgentOutput,
+            agent=self.name, system=self.system_prompt(ctx), user=self.user_prompt(ctx),
+            schema=AgentOutputPro if is_pro(ctx.prompt_version) else AgentOutput,
             model=self.model, tools=self.tool_names(ctx), executor=self.executor,
             enable_search=self.enable_search, max_turns=self.max_turns, thinking=self.thinking,
         )
@@ -115,7 +135,12 @@ def to_report(name: str, res: AgentResult) -> AgentReport:
     o: AgentOutput = res.output  # type: ignore[assignment]
     tools_used = [t.tool for t in res.trace if not t.error]
     sources = list(dict.fromkeys([*o.sources, *tools_used, *res.sources]))
+    pro: dict = {}
+    if isinstance(o, AgentOutputPro):
+        pro = {"scenario_probs": o.scenario_probs.normalized(), "key_levels": o.key_levels,
+               "invalidation": o.invalidation}
     return AgentReport(
+        **pro,
         agent=name,
         score=max(-1.0, min(1.0, float(o.score))),
         confidence=max(0.0, min(1.0, float(o.confidence))),

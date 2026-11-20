@@ -212,3 +212,35 @@ MIN_HORIZON_RETURNS = 30
 LAMBDA = 0.5          # |S|=1 shifts the median by 0.5σ over the horizon
 MC_PATHS = 10_000
 JUDGE_MAX_ADJ = 0.2
+
+# --- Pro mode: "The Desk" (PRO.md) -------------------------------------------------
+# Everything here is additive; the Arena never reads it.
+import json as _json  # noqa: E402
+
+PRO_PROMPT_VERSION = _env("PRO_PROMPT_VERSION", "v2")
+PRO_TEMPERATURE = float(_env("PRO_TEMPERATURE", "0.2"))      # §3.1: ≤ 0.3
+
+
+def _cutoffs() -> dict[str, date | None]:
+    """Knowledge cutoff per model (§6.2). None = unknown → every historical date counts as contaminated.
+
+    Fill these in from the model cards; override without editing code with
+    MODEL_CUTOFFS='{"gemini-3.5-flash-lite": "2026-01-31"}' in .env. Local models use the cutoff of their
+    *base* model (Bonsai-27B → its Qwen base)."""
+    base: dict[str, date | None] = {
+        "gemini-3.5-flash-lite": None,
+        "gemini-3.6-flash": None,
+        "gemini-3.8-flash": None,
+        "local:prism-ml/bonsai-27b": None,
+        "claude-haiku-5-5": None,
+        "claude-sonnet-5-5": None,
+        "claude-opus-5-5": None,
+    }
+    raw = _env("MODEL_CUTOFFS")
+    if raw:
+        for k, v in _json.loads(raw).items():
+            base[k] = date.fromisoformat(v) if v else None
+    return base
+
+
+MODEL_CUTOFFS = _cutoffs()
