@@ -1,14 +1,17 @@
 # Progress
 
-## Current state (2026-11-20)
+## Current state (2026-11-20, branch `pro`)
 
-- **Arena** (REDESIGN.md, R1–R8) and the **original build** (ARCHITECTURE.md, CP1–CP9) are done and on `main`: FastAPI + React web app, Streamlit UI, CLI, Auto-Scalp, Hall of Fame, Duel, Replay, share card.
-- **Local LLM** (LOCAL_LLM.md) is merged into `main`: OpenAI-compatible provider for LM Studio (`local:<id>`, host only from `LOCAL_BASE_URL`), `web_search` / `fetch_url` MCP tools, local models in the Arena/Duel pickers (Quick/Deep, no Scalp).
-- **Default model:** `gemini-3.5-flash-lite` for every role; `gemini-3.8-flash` and `local:prism-ml/bonsai-27b` selectable per run. Claude provider implemented, mocks only.
-- **Tests:** `pytest -q` → **214 passed** (`tests/` + `api/tests`, network tests included); browser checks in `web/e2e/`.
-- **Spend so far:** ฿22.17 tracked / ฿12.00 estimated actual of the ฿100 budget (local runs are free).
-- `main` is pushed to https://github.com/Dollar-P/funny-oracle. The local branch `backup/pre-rewrite` must never be pushed.
-- **In progress:** Funny Oracle Pro, "The Desk" (PRO.md), on branch `pro` (plan: [docs/pro-plan.md](docs/pro-plan.md)). Paper trading only.
+- **Arena** (REDESIGN.md) and the **original build** (ARCHITECTURE.md) are done and on `main`; **Local LLM** is merged.
+- **Pro — "The Desk"** (PRO.md) is implemented on branch `pro` (not merged): Signal Engine, Risk Engine, paper
+  broker + Decimal ledger, scheduler with model routing and budgets, LLM backtests with contamination rules,
+  calibration, Evaluation Lab + reports, `/api/pro/*` + SSE, and the Desk UI at `/pro` with an Arena ↔ Desk switch.
+- **Tests:** `pytest -q` → **352 passed** (214 existing + 138 Pro); `web/e2e/pro.mjs` 35/35 on the demo dataset,
+  `web/e2e/mobile.mjs` (Arena) 4/4; `npm run build` OK.
+- **Spend:** ฿27.39 tracked / ฿17.23 estimated actual of ฿100 (Pro P10 used **6 paid runs, ฿5.23 tracked**).
+- **Blocked:** the real overnight scheduler batch on a **local** model (LM Studio was not reachable from this
+  machine; see "P10 — what remains"). Everything else in P10 is done.
+- `main` is on GitHub; `pro` is local only. The local branch `backup/pre-rewrite` must never be pushed.
 
 ## Docs
 
@@ -31,7 +34,85 @@
 | P7 | LLM backtest mode with leakage rules + calibration | ✅ | `tests/pro/test_p7_backtest_llm.py` (16): contamination labels (on the cutoff day = contaminated; unknown cutoff = contaminated); backtest **never runs** a pre-cutoff date by default and replays it as FLAT `contaminated`; with `allow_contaminated` the dates run, are labelled and `verdict_eligible = false`; unknown cutoff → nothing runs; paid model → `CostConfirmationRequired` with an estimate; decision dates match the engine's schedule; point-in-time executor: last bar = the last bar closed at `as_of` (EDT/EST aware), price history and indicators computed from truncated bars, fundamentals/news/sentiment/macro/web refused and not even listed; anonymised payloads; orchestrator `as_of` mode: search off, no News Researcher, created_at/target_time from `as_of`, prompts show the historical time, only price tools offered, scalp refused; ablation variants (team-no-debate, single-agent, leave-one-out); PAV textbook case; isotonic monotone and fixes an overconfident model; identity below n = 50; Platt fallback; walk-forward never uses an outcome unknown at prediction time (label-flip test); Desk bucket calibrator |
 | P8 | Pro API + SSE events | ✅ | `api/tests/test_pro_api.py` (8): settings GET/PUT (deep merge, validation, operational vs experiment keys), **a mocked scheduler day through the API** (simulated clock, `/scheduler/tick`): signal → detail (agents, forecast, deadline, replay link) → approve (409 on a second approve/reject, 404 unknown) → orders → entry + T1 with the stop at breakeven → T2 → journal with review, tags, CSV; the **event stream** is ordered by `seq`, typed (`job_started`, `job_done`, `signal_created`, `order_placed`, `order_filled` ×3, `position_closed`, `equity_tick`), resumable with `after`/`Last-Event-ID`, filterable, and real SSE framing; overview KPIs (Sharpe labelled insufficient data), equity + buy & hold and cash benchmarks, risk limits + correlation matrix of open positions + rejection log, account reset = new experiment (old signals expire), scheduler start/stop/status, evaluation report run (wait) and fetch, backtests (baselines; LLM backtest on a paid model → `needs_confirmation` with an estimate) with progress events and an SSE stream that ends on `backtest_done`; Arena routes untouched. Full suite 351 passed; `npm run build` OK |
 | P9 | Desk UI | ✅ | `web/e2e/pro.mjs` against the demo dataset (`scripts/pro_demo.py`, served from a copy of its DB with the production build): **35/35 checks, 0 console errors** — all 8 pages render at 1440 px and 390 px, no horizontal scroll at 390 px, Approve and Reject work from the blotter (the approved signal shows as a pending entry), the Lab shows confidence intervals, n, insufficient-data badges and contamination labels, the Arena ↔ Desk switch round-trips. `web/e2e/mobile.mjs` (Arena) still 4/4 at 390 px. Screenshots in `docs/pro/` were reviewed; fixes made from them: backtest warm-up excluded from equity (see Pro decisions), straight P10/P50/P90 lines when a prediction has no fan path, 120-bar trade chart, thousands separators on price axes, calibration-plot label overlap, Lab tables in scroll containers, the Arena top bar's switch collapsing to an icon on phones, 100-row blotter. `npm run build` OK |
-| P10 | Real verification + docs | | |
+| P10 | Real verification + docs | ⚠️ partial | **Paid:** 6 real runs (≤ 10) through the real API server and `/api/pro/scheduler/tick` on the real DB — table below. **Report:** `docs/pro/reports/2026-11-20-report-1.{md,json}`. **Docs:** README "Pro mode", this file, merge plan below. **Not done:** the overnight batch on local Quick (LM Studio unreachable) — instructions below |
+
+## P10 — real verification (2026-11-20, 10:00–10:05 Bangkok)
+
+LM Studio was unreachable (no `LOCAL_BASE_URL` in `.env`; the default `localhost:1234` refused), so the primary
+swing model (`local:prism-ml/bonsai-27b`, Quick) could not run and every job took the documented fallback. The
+real database `data/oracle.db` was backed up first. Settings for the batch: 6 stocks (NVDA, AAPL, MSFT, AMZN,
+GOOGL, META), 1M, manual approval, ฿10 daily budget. At 02:58 UTC Thursday's stock jobs were due (valid until
+Friday's 14:30 UTC open), so one `POST /api/pro/scheduler/tick` ran them:
+
+| Job | Routed to (logged reason) | Time | Cost | S_final · conf · P(up) | Result |
+|---|---|---|---|---|---|
+| AAPL 2026-11-19 | flash-lite — "fallback …: LM Studio unreachable" | 29 s | $0.0256 | −0.01 · 0.60 · 51 % | FLAT `judge_no_trade` (also weak signal, bad geometry, R:R 0.90, EV −0.29 R) |
+| AMZN | same | 34 s | $0.0274 | +0.10 · 0.62 · 52 % | FLAT `judge_no_trade` (R:R 1.25, EV −0.16 R) |
+| GOOGL | same | 32 s | $0.0262 | +0.00 · 0.48 · 50 % | FLAT `judge_no_trade` (low confidence, EV −0.21 R) |
+| META | same | 31 s | $0.0251 | −0.04 · 0.65 · 48 % | FLAT `judge_no_trade` (R:R 0.90, EV −0.25 R) |
+| MSFT | same | 32 s | $0.0283 | +0.04 · 0.50 · 51 % | FLAT `judge_no_trade` (R:R 1.15, EV −0.20 R) |
+| NVDA | same | 30 s | $0.0258 | −0.06 · 0.55 · 48 % | FLAT `judge_no_trade` (R:R 0.89, EV −0.25 R) |
+
+Total ฿5.23 tracked. Verified for real: v2 prompts at temperature 0.2 returned every Pro field (5/5 agents with
+scenario probabilities, key levels and invalidation; the judge's thesis, invalidation and a no-trade reason);
+11–12 tool snapshots stored per run; routing reason logged in `scheduler_runs`; budget accounting; the signal
+detail page on real data (`docs/pro/real_signal_detail_1440.png`). **No trade was opened** — all six were FLAT,
+which is what PRO.md §2.1 expects for low-conviction days, but it means real fills have not happened yet.
+
+**First evaluation report** (`docs/pro/reports/2026-11-20-report-1.md`): forward section = insufficient data
+(6 predictions, none evaluated yet; 0 trades). Backtests, 2023-11-21 → 2026-11-19, the 6 stocks, same costs and
+Risk Engine, 751 trading days each:
+
+| Strategy | Sharpe [95 % CI] | ΔSharpe vs B&H [95 % CI] | Total return | Max DD | Trades |
+|---|---|---|---|---|---|
+| Buy & hold (equal weight) | 1.00 [−0.08, 2.08] | — | +96.2 % | −26.8 % | – |
+| Momentum (3-month) | −0.04 [−1.18, 1.08] | −1.04 [−2.38, 0.27] | −0.7 % | −11.0 % | 107 |
+| SMA 50/200 | 0.14 [−0.94, 1.23] | −0.86 [−1.87, 0.01] | +1.6 % | −8.9 % | 214 |
+| Quant-only (no LLM) | 0.09 [−0.91, 1.00] | −0.91 [−2.07, 0.06] | +0.7 % | −4.9 % | 135 |
+
+Quant-only directional hit rate 54.8 % [48.0 %, 61.3 %] (n = 210 non-overlapping), Brier 0.259 (coin flip 0.250);
+it ranks at the 57th percentile of 1,000 random strategies (Sharpe 5/50/95th pct −1.14 / 0.01 / 0.87). Verdict:
+**no evidence of a difference vs buy & hold** (every CI touches 0); with 0.5 % risk per trade the systematic
+strategies are barely invested next to a +96 % buy & hold in mega-cap tech. 5 variants compared → Bonferroni α/k
+= 0.01.
+
+### P10 — what remains (blocked) and how to run it
+
+1. Put the LM Studio address in `.env`: `LOCAL_BASE_URL=http://<lm-studio-host>:1234/v1` (never commit it), load
+   `prism-ml/bonsai-27b`, and check `GET /api/models` shows it as available.
+2. Start the API in the evening: `uvicorn api.main:app --port 8000`. In Settings, set the 14-asset default
+   watchlist (or keep the 6 stocks), approval mode, and `local_tz` (`Asia/Bangkok`).
+3. Start the scheduler before 23:00 (Overview → Start, or `POST /api/pro/scheduler/start`). Inside the window
+   (23:00–07:00) stock jobs (after the 04:00 Bangkok close + 30 min), gold and crypto jobs run on local Quick,
+   serially (≈ 6–7 min each). To verify outside the window, set a temporary `local_window` in Settings and record
+   it here.
+4. Next morning: check Overview → Recent scheduler jobs (routing reasons), approve/reject signals, then Lab → Run
+   evaluation. Record the batch here (jobs, times, how many local vs fallback, signals).
+
+## Check manually (Pro)
+
+1. **The local overnight batch** above (blocked during development).
+2. **A real trade lifecycle**: approve a real signal and follow it to a fill, T1/T2/stop and the Reviewer
+   post-mortem over the following days (only simulated so far).
+3. **Real 1m intrabar resolution**: `minute_resolver` is unit-tested with fake bars; the forward loop does not
+   pass a resolver yet, so ambiguous bars are always resolved as "stop".
+4. **The Desk in a real browser**: live row highlights via SSE and the CSV download (headless can't check the file).
+5. **Real data in `data/oracle.db`**: P10 added Pro tables, settings, 6 Pro predictions (source `pro`) and 6 FLAT
+   signals. They are additive; the Pro predictions also show up in the Arena's Hall of Fame.
+
+## Merge plan (`pro` → `main`) — not merged
+
+1. Rebase/merge `main` into `pro` first (no conflicts expected: `main` has not moved since `pro` branched).
+2. Shared-code changes are additive and default to the Arena's behaviour: `agents/prompts/` moved to `v1/`
+   (byte-identical, pinned by test), optional fields on `AgentReport`/`Verdict`/`Prediction`, `VerdictOutput` (same
+   JSON schema as before, pinned), `run_prediction(prompt_version, temperature, experiment_id, as_of)` with
+   Arena defaults, `LLM(temperature)`, additive DB migration + new tables, `RunManager.start_real` passing Pro
+   params only when present, `mcp_server.server.price_history_payload` (extracted, same output), the Arena top
+   bar's mode switch, and the new `/pro` routes.
+3. Before merging: run `pytest -q`, `npm run build`, `web/e2e/mobile.mjs`, `show.mjs`, `replay.mjs`, `r7.mjs`
+   (Arena) and `pro.mjs` (Desk demo); decide whether Pro predictions should be hidden from the Hall of Fame
+   (filter `source = 'pro'`); fill in `MODEL_CUTOFFS` if LLM backtests are wanted.
+4. Merge with `--no-ff`, push `main` only, and keep `pro` for the forward test that continues to accumulate data.
 
 ## Pro decisions
 
@@ -178,6 +259,15 @@
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues
+
+- **No real fill yet**: the 6 real P10 predictions were all FLAT; trading behaviour is verified on simulations
+  and the demo only.
+- **Pro predictions appear in the Arena's Hall of Fame** (same `predictions` table, `source = 'pro'`).
+- **Intrabar resolution** with 1m bars is implemented but not wired into the forward loop (ambiguous bars → stop).
+- **Demo dataset build is slow** (~5 min for 75 simulated days) because every tick re-reads bars; fine for a
+  one-off build.
+- **Backtest equity is daily**; the forward equity curve is marked on every scheduler tick (resampled to daily in
+  the Lab).
 
 - **Anonymised backtests are partial**: `PointInTimeExecutor(anonymize=True)` hides the ticker and dates in tool
   payloads, but the prompts still name the ticker and the decision time, so it is not a full anonymised

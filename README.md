@@ -163,6 +163,9 @@ Tools: `get_price_history`, `get_indicators`, `get_fundamentals`, `get_macro`, `
 
 ## Tests
 
+Pro: `pytest tests/pro api/tests/test_pro_api.py` (unit, property and simulation tests) and
+`node web/e2e/pro.mjs <url> <outDir>` against the demo server (a copy of the demo DB — it approves/rejects).
+
 ```powershell
 .venv\Scripts\python -m pytest -q                         # tests/ + api/tests (pytest.ini); network tests hit yfinance/FRED/CoinGecko
 .venv\Scripts\python -m pytest -q --ignore tests\test_mcp_tools.py --ignore tests\test_mcp_client.py   # offline
@@ -202,9 +205,63 @@ Start Auto-Scalp (Hall of Fame, or `scripts\auto_scalp.py`) at least an hour bef
 evaluated predictions. No network or budget on the day? Run in mock mode, or open `/p/<id>` →
 **▶ Replay the show**.
 
+## Pro mode — "The Desk" (paper trading research)
+
+The Desk (`/pro` in the web app, switch **Arena ↔ Desk** in the top bar) turns predictions into trade plans,
+runs them through a risk engine into a **paper** account, and measures — against non-LLM baselines, with
+confidence intervals — whether the agents add any value. Spec: `PRO.md`; implementation plan:
+`docs/pro-plan.md`; status, decisions and known issues: `PROGRESS.md`. **Paper money only: there is no broker
+integration anywhere.**
+
+![The Desk — signal detail](docs/pro/real_signal_detail_1440.png)
+
+How it works, in one line per stage:
+
+- **Scheduler** (`trading/scheduler.py`): one swing prediction per asset per day (stocks 30 min after the NYSE
+  close, gold after the CME close, crypto 23:30 UTC). Swing runs on your local LM Studio model (Quick) inside
+  the local window (default 23:00–07:00), otherwise falls back to Gemini Flash-Lite within a daily money budget
+  (default ฿10). Scheduled jobs yield to Arena runs and never run twice (restart-safe).
+- **Signal Engine** (`trading/signals.py`): most predictions are FLAT. A trade needs |S| ≥ 0.15, confidence ≥
+  0.5, R:R ≥ 1.5 and positive expected value after costs; stop = the wider of 1.5 ATR and the P10/P90 edge;
+  targets P50 / P90.
+- **Risk Engine** (`trading/risk.py`): 0.5 % risk per trade, caps on position, gross, asset class, volatility,
+  open positions and correlation; −2 % daily-loss and −10 % drawdown breakers. Property-tested.
+- **Paper broker + ledger** (`trading/broker_paper.py`, `trading/ledger.py`): next-bar-open fills, slippage and
+  fees, OCO brackets with T1 → breakeven, gaps, intrabar ambiguity = stop; cash reconciles to the cent.
+- **Evaluation Lab** (`evaluation/`): buy & hold, cash, momentum, SMA cross, 1,000 random strategies, quant-only
+  (no LLM) and the LLM system on the same costs and risk rules; Wilson and block-bootstrap CIs, Brier, pinball,
+  band coverage, calibration, ablations; "insufficient data" below 30 samples; LLM backtests only after a
+  model's knowledge cutoff (`config.MODEL_CUTOFFS`).
+
+Run it:
+
+```powershell
+uvicorn api.main:app --port 8000                     # serves web/dist; open http://localhost:8000/pro
+# Settings page: watchlist, models, approval mode (manual by default), budgets, risk/cost parameters.
+# Overview → Start (or POST /api/pro/scheduler/start). One pass now: POST /api/pro/scheduler/tick
+# Lab → Run evaluation (or POST /api/pro/evaluation/run); reports also go to the `reports` table.
+```
+
+Local model: set `LOCAL_BASE_URL` in `.env` to your LM Studio server (e.g. `http://<lm-studio-host>:1234/v1`) and
+keep the API running through the local window. Optional `.env`: `PRO_LOCAL_WINDOW`, `PRO_TZ`,
+`PRO_STARTING_EQUITY`, `ALLOW_CRYPTO_SHORT`, `MODEL_CUTOFFS` (JSON).
+
+No network, no key? A deterministic demo (synthetic prices, rule-based "agents", 75 simulated days):
+
+```powershell
+python scripts\pro_demo.py
+$env:PRO_DEMO_DIR="data/pro_demo"; $env:ORACLE_DB="data/pro_demo/pro_demo.db"; $env:MOCK_LLM="true"
+uvicorn api.main:app --port 8011                     # http://localhost:8011/pro
+```
+
+Expect the honest result: the LLM system will most likely not beat simple baselines after costs, and swing
+evidence takes months to accumulate (about 12 non-overlapping 1-month samples per asset per year). The Lab is
+built to show that clearly either way.
+
 ## Roadmap
 
-- **Pro / paper-trading mode** (planned; spec in `PRO.md`).
+- **Pro mode:** first real overnight batch on a local model (blocked on LM Studio access during development, see
+  `PROGRESS.md`); fully anonymised backtests; knowledge cutoffs for each model.
 - **Local models, Deep preset:** implemented and unit-tested, but not yet verified with a real run (Quick is
   verified; see `LOCAL_LLM.md`).
 

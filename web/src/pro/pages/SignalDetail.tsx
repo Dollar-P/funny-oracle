@@ -70,7 +70,7 @@ export default function SignalDetail() {
           <Row k="P(win)" v={<>{pctf(s.p_win, 0, false)} {s.calibrated ? <Badge tone="up">calibrated</Badge> : <Badge>uncalibrated</Badge>}</>} />
           <Row k="Conviction |S|·conf" v={num(s.conviction)} />
           <Row k="Costs" v={rr(-s.cost_r, 3)} />
-          {s.entry_deadline && <Row k="Approve before" v={dt(s.entry_deadline)} />}
+          {s.entry_deadline && s.status === "new" && <Row k="Approve before" v={dt(s.entry_deadline)} />}
         </Panel>
       </div>
 
