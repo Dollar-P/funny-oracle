@@ -220,8 +220,11 @@ def _schema_hint(schema: type[BaseModel]) -> str:
 
 class LLM:
     def __init__(self, provider: str | None = None, run_id: str | None = None,
-                 guard: BudgetGuard | None = None, client: Any = None, think_preset: str | None = None):
+                 guard: BudgetGuard | None = None, client: Any = None, think_preset: str | None = None,
+                 temperature: float | None = None):
         self.provider = (provider or config.LLM_PROVIDER).lower()
+        # None = each provider's default (the Arena); Pro mode sets ≤ 0.3 (PRO.md §3.1)
+        self.temperature = temperature
         self.run_id = run_id
         self.guard = guard or BudgetGuard()
         self.think_preset = (think_preset or config.LOCAL_THINK_PRESET).lower()  # local provider only
@@ -303,6 +306,8 @@ class GeminiBackend:
         from google.genai import errors
 
         self.llm.guard.check_call()
+        if self.llm.temperature is not None and getattr(cfg, "temperature", None) is None:
+            cfg.temperature = self.llm.temperature
         delay = 2.0
         for attempt in range(4):
             try:
@@ -528,6 +533,8 @@ class ClaudeBackend:
 
     async def _create(self, agent: str, **kw):
         self.llm.guard.check_call()
+        if self.llm.temperature is not None:
+            kw.setdefault("temperature", self.llm.temperature)
         async with _semaphore():
             resp = await self.client.messages.create(**kw)
         u = resp.usage
@@ -712,7 +719,7 @@ class OpenAICompatBackend:
         payload: dict[str, Any] = {
             "model": config.local_model_id(model),
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": 0.2 if self.llm.temperature is None else self.llm.temperature,
             "max_tokens": config.LOCAL_MAX_TOKENS_THINK if think else config.LOCAL_MAX_TOKENS_FAST,
         }
         if not think:

@@ -150,7 +150,9 @@ class RunManager:
                     params["ticker"], params["mode"], params["horizon"], source=params.get("source", "web"),
                     analyst_model=params.get("analyst_model"), judge_model=params.get("judge_model"),
                     on_event=on_event, run_id=run.run_id, duel_id=duel_id,
-                    think_preset=params.get("think_preset")))
+                    think_preset=params.get("think_preset"),
+                    # Pro (scheduled) runs only; the Arena never sets these
+                    **{k: params[k] for k in ("prompt_version", "temperature", "experiment_id") if k in params}))
             except Exception as e:  # orchestrator already emitted a fatal error event
                 log.warning("run %s failed: %s", run.run_id, e)
                 if run.error is None:

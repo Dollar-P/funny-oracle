@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import BudgetMeter from "./BudgetMeter";
 import { useSettings } from "../state/settings";
 import { DISCLAIMER } from "../lib/cast";
+import ModeSwitch from "../pro/ModeSwitch";
 
 const NAV = [
   { to: "/", label: "Arena", icon: "🎪" },
@@ -25,7 +26,7 @@ export default function TopBar() {
               to={n.to}
               end={n.to === "/"}
               className={({ isActive }) =>
-                `px-2.5 sm:px-3 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                `px-2 sm:px-3 py-1.5 rounded-full text-sm font-semibold transition-colors ${
                   isActive ? "bg-surface-2 text-ink shadow-glow" : "text-ink-dim hover:text-ink hover:bg-surface"
                 }`
               }
@@ -35,8 +36,16 @@ export default function TopBar() {
               <span className="sr-only md:hidden">{n.label}</span>
             </NavLink>
           ))}
+          {/* phones: the Arena ↔ Desk switch collapses into one more icon so the bar never overflows */}
+          <NavLink to="/pro" className="sm:hidden px-2 py-1.5 rounded-full text-sm font-semibold text-ink-dim hover:text-ink hover:bg-surface">
+            <span aria-hidden="true">📊</span>
+            <span className="sr-only">Desk (research mode)</span>
+          </NavLink>
         </nav>
         <div className="flex-1" />
+        <div className="hidden sm:block">
+          <ModeSwitch active="arena" />
+        </div>
         <BudgetMeter />
         <button
           onClick={toggleSound}

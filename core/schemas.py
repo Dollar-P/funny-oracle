@@ -1,9 +1,25 @@
 """Pydantic schemas shared across agents, orchestrator, UI and scoreboard."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
+
+
+class _HidesProDefaults(BaseModel):
+    """Pro (v2) fields still at their default are left out of dumps, so Arena JSON (stored prediction_json, API
+    responses, run events) stays byte-identical to main. Loading fills the defaults back in (round-trip safe)."""
+
+    _pro_defaults: ClassVar[dict[str, Any]] = {}
+
+    @model_serializer(mode="wrap")
+    def _drop_pro_defaults(self, handler):
+        d = handler(self)
+        if isinstance(d, dict):
+            for k, default in self._pro_defaults.items():
+                if k in d and d[k] == default:
+                    del d[k]
+        return d
 
 
 class ToolCall(BaseModel):
@@ -24,8 +40,47 @@ class AgentOutput(BaseModel):
     sources: list[str] = Field(default_factory=list, description="tool names or URLs used")
 
 
-class AgentReport(AgentOutput):
+class ScenarioProbs(BaseModel):
+    """Pro (v2 prompts): probabilities of the bull / base / bear outcome; normalised to sum 1 in code."""
+
+    bull: float = Field(description="decimal 0..1")
+    base: float = Field(description="decimal 0..1")
+    bear: float = Field(description="decimal 0..1")
+
+    def normalized(self) -> "ScenarioProbs":
+        vals = [max(0.0, float(v)) for v in (self.bull, self.base, self.bear)]
+        tot = sum(vals)
+        if tot <= 0:
+            return ScenarioProbs(bull=1 / 3, base=1 / 3, bear=1 / 3)
+        return ScenarioProbs(bull=vals[0] / tot, base=vals[1] / tot, bear=vals[2] / tot)
+
+
+class KeyLevels(BaseModel):
+    support: list[float] = Field(default_factory=list, description="support prices from tool results")
+    resistance: list[float] = Field(default_factory=list, description="resistance prices from tool results")
+
+
+class Catalyst(BaseModel):
+    date: str = Field(description="ISO date YYYY-MM-DD")
+    event: str = Field(description="e.g. earnings, CPI, FOMC")
+    impact: Literal["high", "medium", "low"] = Field(default="medium", description="high | medium | low")
+
+
+class AgentOutputPro(AgentOutput):
+    """LLM-facing schema for Pro (v2) prompts. The Arena keeps AgentOutput, so its JSON schema is unchanged."""
+
+    scenario_probs: ScenarioProbs = Field(description="bull/base/bear probabilities, decimals summing to 1")
+    key_levels: KeyLevels = Field(description="support / resistance prices (empty lists if not applicable)")
+    invalidation: str = Field(description="one sentence: the observable fact that would prove this view wrong")
+
+
+class AgentReport(AgentOutput, _HidesProDefaults):
+    _pro_defaults: ClassVar[dict[str, Any]] = {"scenario_probs": None, "key_levels": None, "invalidation": None}
     agent: str
+    # Pro (v2) fields — optional, the Arena never sets them
+    scenario_probs: ScenarioProbs | None = None
+    key_levels: KeyLevels | None = None
+    invalidation: str | None = None
     trace: list[ToolCall] = Field(default_factory=list)
     cost_usd: float = 0.0
     error: str | None = None  # set when the agent failed and was dropped
@@ -57,12 +112,43 @@ class DebateArgument(DebateOutput):
     turn: DebateTurn | None = None  # None = stored before the debate became sequential
 
 
-class Verdict(BaseModel):
+# What the Judge LLM returns in the Arena (v1). Its JSON schema must not change (no docstring: pydantic would
+# put it in the schema as a description).
+class VerdictOutput(BaseModel):
     adjustment: float = Field(description="-0.2..+0.2 adjustment to the team score")
     final_confidence: float = Field(description="0..1")
     headline: str = Field(description="one witty line summarising the debate outcome")
     summary: str = Field(description="2-4 sentences")
     key_risks: list[str] = Field(description="2-4 key risks")
+
+
+class Verdict(VerdictOutput, _HidesProDefaults):
+    """Stored verdict. Pro (v2) fields are optional; the Arena never sets them."""
+
+    _pro_defaults: ClassVar[dict[str, Any]] = {"thesis": None, "invalidation": None, "catalysts": [],
+                                               "no_trade_reason": None}
+
+    thesis: str | None = None
+    invalidation: str | None = None
+    catalysts: list[Catalyst] = Field(default_factory=list)
+    no_trade_reason: str | None = None
+
+
+class VerdictPro(VerdictOutput):
+    """LLM-facing judge schema for Pro (v2) prompts."""
+
+    headline: str = Field(description="one plain, factual line summarising the committee view")
+    thesis: str = Field(description="the committee view in at most 80 words")
+    invalidation: str = Field(description="one sentence: what would prove the thesis wrong within the horizon")
+    catalysts: list[Catalyst] = Field(description="dated events inside the horizon; empty list if none")
+    no_trade_reason: str = Field(description="why not to act, if the evidence is too weak; else empty string")
+
+
+def to_verdict(v: VerdictOutput) -> Verdict:
+    d = v.model_dump()
+    if "no_trade_reason" in d:
+        d["no_trade_reason"] = (d["no_trade_reason"] or "").strip() or None
+    return Verdict(**d)
 
 
 # --- strict variants for local models (LOCAL_LLM.md lessons 1-2) -------------------------------
@@ -80,12 +166,25 @@ class AgentOutputStrict(AgentOutput):
                                   description="3-5 short bullet points citing numbers from tools")
 
 
-class VerdictStrict(Verdict):
+class VerdictStrict(VerdictOutput):
     adjustment: float = Field(ge=-1.0, le=1.0, description="decimal from -0.2 to 0.2, e.g. 0.05, NOT a percentage")
     final_confidence: float = Field(ge=0.0, le=1.0, description=DECIMAL_CONF)
 
 
-STRICT_SCHEMAS: dict[type, type] = {AgentOutput: AgentOutputStrict, Verdict: VerdictStrict}
+class AgentOutputProStrict(AgentOutputPro):
+    score: float = Field(ge=-1.0, le=1.0, description=DECIMAL_SCORE)
+    confidence: float = Field(ge=0.0, le=1.0, description=DECIMAL_CONF)
+    key_points: list[str] = Field(min_length=1, max_length=6,
+                                  description="3-5 short bullet points citing numbers from tools")
+
+
+class VerdictProStrict(VerdictPro):
+    adjustment: float = Field(ge=-1.0, le=1.0, description="decimal from -0.2 to 0.2, e.g. 0.05, NOT a percentage")
+    final_confidence: float = Field(ge=0.0, le=1.0, description=DECIMAL_CONF)
+
+
+STRICT_SCHEMAS: dict[type, type] = {AgentOutput: AgentOutputStrict, Verdict: VerdictStrict, VerdictOutput: VerdictStrict,
+                                    AgentOutputPro: AgentOutputProStrict, VerdictPro: VerdictProStrict}
 
 
 class Forecast(BaseModel):
@@ -100,7 +199,9 @@ class Forecast(BaseModel):
     fan: dict[str, list[float]] = Field(default_factory=dict)  # p10/p50/p90 per step
 
 
-class Prediction(BaseModel):
+class Prediction(_HidesProDefaults):
+    _pro_defaults: ClassVar[dict[str, Any]] = {"prompt_version": "v1", "temperature": None, "experiment_id": None,
+                                               "degraded": [], "as_of": None}
     id: int | None = None
     created_at: str
     ticker: str
@@ -125,3 +226,9 @@ class Prediction(BaseModel):
     run_id: str | None = None
     duel_id: str | None = None   # shared by both runs of a Model-vs-Model duel
     think_preset: str | None = None  # local models: quick | deep (LOCAL_LLM.md)
+    # Pro (additive; defaults reproduce the Arena)
+    prompt_version: str = "v1"
+    temperature: float | None = None
+    experiment_id: int | None = None
+    degraded: list[str] = Field(default_factory=list)  # data-quality flags (PRO.md §4) → Signal Engine forces FLAT
+    as_of: str | None = None          # backtest mode: the decision time the run was restricted to

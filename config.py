@@ -212,3 +212,51 @@ MIN_HORIZON_RETURNS = 30
 LAMBDA = 0.5          # |S|=1 shifts the median by 0.5σ over the horizon
 MC_PATHS = 10_000
 JUDGE_MAX_ADJ = 0.2
+
+# --- Pro mode: "The Desk" (PRO.md) -------------------------------------------------
+# Everything here is additive; the Arena never reads it.
+import json as _json  # noqa: E402
+
+PRO_PROMPT_VERSION = _env("PRO_PROMPT_VERSION", "v2")
+PRO_TEMPERATURE = float(_env("PRO_TEMPERATURE", "0.2"))      # §3.1: ≤ 0.3
+
+
+def _cutoffs() -> dict[str, date | None]:
+    """Knowledge cutoff per model (§6.2). None = unknown → every historical date counts as contaminated.
+
+    Fill these in from the model cards; override without editing code with
+    MODEL_CUTOFFS='{"gemini-3.5-flash-lite": "2026-01-31"}' in .env. Local models use the cutoff of their
+    *base* model (Bonsai-27B → its Qwen base)."""
+    base: dict[str, date | None] = {
+        "gemini-3.5-flash-lite": None,
+        "gemini-3.6-flash": None,
+        "gemini-3.8-flash": None,
+        "local:prism-ml/bonsai-27b": None,
+        "claude-haiku-5-5": None,
+        "claude-sonnet-5-5": None,
+        "claude-opus-5-5": None,
+    }
+    raw = _env("MODEL_CUTOFFS")
+    if raw:
+        for k, v in _json.loads(raw).items():
+            base[k] = date.fromisoformat(v) if v else None
+    return base
+
+
+MODEL_CUTOFFS = _cutoffs()
+
+# Pro cost model (PRO.md §3.4), bps per side. Gold trades via the GC=F / GLD proxy.
+PRO_COSTS_BPS = {
+    "stock": {"fee": 0.0, "slippage": 2.0},
+    "gold": {"fee": 0.0, "slippage": 3.0},
+    "crypto": {"fee": 10.0, "slippage": 5.0},
+}
+# Signal Engine defaults (PRO.md §3.2)
+PRO_SIGNAL = {"s_min": 0.15, "conf_min": 0.5, "rr_min": 1.5, "k_atr_swing": 1.5, "k_atr_scalp": 1.0,
+              "catalyst_window": 0.10, "allow_crypto_short": _bool("ALLOW_CRYPTO_SHORT", False), "atr_period": 14}
+# Risk Engine defaults (PRO.md §3.3); fractions of equity
+PRO_RISK = {"risk_pct_swing": 0.005, "risk_pct_scalp": 0.0025, "vol_target": 0.15, "max_position": 0.20,
+            "max_gross": 1.0, "max_class": {"stock": 0.60, "crypto": 0.30, "gold": 0.30}, "max_open": 8,
+            "corr_max": 0.8, "corr_combined_risk": 0.01, "corr_lookback": 60, "daily_loss": -0.02,
+            "max_dd": -0.10, "kelly_fraction": 0.25, "kelly_min_n": 100}
+PRO_STARTING_EQUITY = float(_env("PRO_STARTING_EQUITY", "100000"))

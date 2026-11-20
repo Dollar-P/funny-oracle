@@ -163,6 +163,9 @@ Tools: `get_price_history`, `get_indicators`, `get_fundamentals`, `get_macro`, `
 
 ## Tests
 
+Pro: `pytest tests/pro api/tests/test_pro_api.py` (unit, property and simulation tests) and
+`node web/e2e/pro.mjs <url> <outDir>` against the demo server (a copy of the demo DB — it approves/rejects).
+
 ```powershell
 .venv\Scripts\python -m pytest -q                         # tests/ + api/tests (pytest.ini); network tests hit yfinance/FRED/CoinGecko
 .venv\Scripts\python -m pytest -q --ignore tests\test_mcp_tools.py --ignore tests\test_mcp_client.py   # offline
@@ -202,9 +205,98 @@ Start Auto-Scalp (Hall of Fame, or `scripts\auto_scalp.py`) at least an hour bef
 evaluated predictions. No network or budget on the day? Run in mock mode, or open `/p/<id>` →
 **▶ Replay the show**.
 
+## Pro mode — "The Desk" (paper trading research)
+
+The Desk (`/pro` in the web app, switch **Arena ↔ Desk** in the top bar) turns predictions into trade plans,
+runs them through a risk engine into a **paper** account, and measures — against non-LLM baselines, with
+confidence intervals — whether the agents add any value. Spec: `PRO.md`; implementation plan:
+`docs/pro-plan.md`; status, decisions and known issues: `PROGRESS.md`. **Paper money only: there is no broker
+integration anywhere.**
+
+![The Desk — signal detail](docs/pro/real_signal_detail_1440.png)
+
+How it works, in one line per stage:
+
+- **Scheduler** (`trading/scheduler.py`): one swing prediction per asset per day (stocks 30 min after the NYSE
+  close, gold after the CME close, crypto 23:30 UTC). Swing runs on your local LM Studio model (Quick) inside
+  the local window (default 23:00–07:00), otherwise falls back to Gemini Flash-Lite within a daily money budget
+  (default ฿10). Scheduled jobs yield to Arena runs and never run twice (restart-safe).
+- **Signal Engine** (`trading/signals.py`): most predictions are FLAT. A trade needs |S| ≥ 0.15, confidence ≥
+  0.5, R:R ≥ 1.5 and positive expected value after costs; stop = the wider of 1.5 ATR and the P10/P90 edge;
+  targets P50 / P90.
+- **Risk Engine** (`trading/risk.py`): 0.5 % risk per trade, caps on position, gross, asset class, volatility,
+  open positions and correlation; −2 % daily-loss and −10 % drawdown breakers. Property-tested.
+- **Paper broker + ledger** (`trading/broker_paper.py`, `trading/ledger.py`): next-bar-open fills, slippage and
+  fees, OCO brackets with T1 → breakeven, gaps, intrabar ambiguity = stop; cash reconciles to the cent.
+- **Evaluation Lab** (`evaluation/`): buy & hold, cash, momentum, SMA cross, 1,000 random strategies, quant-only
+  (no LLM) and the LLM system on the same costs and risk rules; Wilson and block-bootstrap CIs, Brier, pinball,
+  band coverage, calibration, ablations; "insufficient data" below 30 samples; LLM backtests only after a
+  model's knowledge cutoff (`config.MODEL_CUTOFFS`).
+
+**Arena and Desk are separate worlds.** Both store predictions in the same table; Desk predictions have
+`source = 'pro'`. The Arena (Hall of Fame, history, replays, mock shows, duels, model stats, cost estimates,
+Streamlit, CLI) never shows them, and the Desk reads only them (`core/worlds.py`; a test fails if a new query
+forgets the filter). Money: the real budget cap (`BUDGET_THB`) is one combined figure for Arena + Pro, so the
+Arena's coin meter includes Pro spend. The Desk Overview shows Pro spend separately, and Arena stats never
+count it.
+
+### Try the Desk in demo mode (Windows PowerShell, no network, no LLM, no money)
+
+The demo dataset is in `data\pro_demo\` (synthetic prices, rule-based "agents", 75 simulated days). If it is
+missing, build it first with `.\.venv\Scripts\python.exe scripts\pro_demo.py` (about 5 minutes).
+
+```powershell
+cd D:\funny-price-prediction-project
+$env:PRO_DEMO_DIR = "data\pro_demo"
+$env:ORACLE_DB    = "data\pro_demo\pro_demo.db"
+$env:MOCK_LLM     = "true"
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --port 8011
+```
+
+Open **http://127.0.0.1:8011/pro** (the web build in `web\dist` is served by the API; run `npm run build` in
+`web\` if it is missing). The clock is frozen at the demo's "now" (Fri 2026-11-20 23:50 UTC) and two signals are
+waiting for approval. Approving or rejecting writes to the demo DB; rebuild it with `scripts\pro_demo.py` to
+start over. Stop with Ctrl+C. The `$env:` variables stay set in that PowerShell window, so use a new window
+for real mode (or run `Remove-Item Env:PRO_DEMO_DIR, Env:ORACLE_DB, Env:MOCK_LLM`).
+
+### Real mode (paper account on real prices, local model overnight)
+
+`LOCAL_BASE_URL` in `.env` points at LM Studio; load `prism-ml/bonsai-27b` there. In a **new** PowerShell
+window:
+
+```powershell
+cd D:\funny-price-prediction-project
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --port 8000      # real DB data\oracle.db, MOCK_LLM=false from .env
+```
+
+In a second PowerShell window, check the local model and start the scheduler **before 23:00** (the local
+window is 23:00–07:00, Asia/Bangkok):
+
+```powershell
+(Invoke-RestMethod http://127.0.0.1:8000/api/models).models | Where-Object id -like "local:*" | Select-Object id, available, unavailable_reason
+# expect: local:prism-ml/bonsai-27b  True
+Invoke-RestMethod http://127.0.0.1:8000/api/pro/scheduler/status     # local_available should be True
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/pro/scheduler/start
+```
+
+Or open **http://127.0.0.1:8000/pro**, check Settings (watchlist, approval = manual, budgets, `local_tz`), and
+press **Overview → Start**. Keep the API window open overnight; the scheduler lives inside it. Stock jobs run
+after the NYSE close, gold and crypto later; inside the window each job runs on the local model (≈ 6–7 min,
+one at a time). Outside the window, or if LM Studio is unreachable, a job falls back to Gemini Flash-Lite
+within the daily Pro budget (default ฿10), and the reason is logged. Next morning: Overview → Recent
+scheduler jobs, approve/reject in Signals, then Lab → Run evaluation. One pass now instead of waiting: `POST /api/pro/scheduler/tick`.
+
+Optional `.env`: `PRO_LOCAL_WINDOW`, `PRO_TZ`, `PRO_STARTING_EQUITY`, `ALLOW_CRYPTO_SHORT`, `MODEL_CUTOFFS`
+(JSON).
+
+Expect the honest result: the LLM system will most likely not beat simple baselines after costs, and swing
+evidence takes months to accumulate (about 12 non-overlapping 1-month samples per asset per year). The Lab is
+built to show that clearly either way.
+
 ## Roadmap
 
-- **Pro / paper-trading mode** (planned; spec in `PRO.md`).
+- **Pro mode:** first real overnight batch on a local model (blocked on LM Studio access during development, see
+  `PROGRESS.md`); fully anonymised backtests; knowledge cutoffs for each model.
 - **Local models, Deep preset:** implemented and unit-tested, but not yet verified with a real run (Quick is
   verified; see `LOCAL_LLM.md`).
 

@@ -78,6 +78,11 @@ def get_price_history(ticker: str, interval: str = "1d", period: str | None = No
     """
     _check_interval(interval)
     df = ds.fetch_ohlcv(ticker, interval, period)
+    return price_history_payload(df, ticker, interval, period)
+
+
+def price_history_payload(df, ticker: str, interval: str, period: str | None) -> dict:
+    """get_price_history's response for a given DataFrame (shared with the point-in-time backtest executor)."""
     c = df["Close"]
     logret = np.log(c).diff().dropna()
     summary = {

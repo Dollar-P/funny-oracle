@@ -15,14 +15,15 @@ from core import cost
 from core.asset import classify, normalize
 from core.db import connect
 from core.schemas import Prediction
+from core.worlds import ARENA_ONLY
 
 
 # --- picking a stored prediction --------------------------------------------------
 
 def stored_ids() -> list[dict]:
     with connect() as conn:
-        rows = conn.execute("SELECT id, ticker, asset_type, mode FROM predictions"
-                            " WHERE prediction_json IS NOT NULL AND prediction_json != '{}' ORDER BY id DESC").fetchall()
+        rows = conn.execute(f"SELECT id, ticker, asset_type, mode FROM predictions WHERE {ARENA_ONLY}"
+                            " AND prediction_json IS NOT NULL AND prediction_json != '{}' ORDER BY id DESC").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -44,7 +45,7 @@ def pick(ticker: str, mode: str, exclude: set[int] | None = None) -> int | None:
 
 def load(pid: int) -> Prediction | None:
     with connect() as conn:
-        row = conn.execute("SELECT prediction_json FROM predictions WHERE id = ?", (pid,)).fetchone()
+        row = conn.execute(f"SELECT prediction_json FROM predictions WHERE id = ? AND {ARENA_ONLY}", (pid,)).fetchone()
     return Prediction.model_validate_json(row[0]) if row and row[0] and row[0] != "{}" else None
 
 

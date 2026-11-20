@@ -29,9 +29,10 @@ export default function BudgetMeter() {
           <div className="h-full rounded-full transition-all duration-500" style={{ width: `${frac * 100}%`, background: tone }} />
         </div>
       </div>
-      <span className="num text-sm" style={{ color: frac > 0.7 ? tone : undefined }}>
+      {/* nowrap: on phones the bar also carries the Desk icon; the cap is hidden there (still in the tooltip) */}
+      <span className="num text-sm whitespace-nowrap" style={{ color: frac > 0.7 ? tone : undefined }}>
         <span aria-hidden="true">🪙 </span>
-        {thb(used, 0)} / {thb(data.budget_thb, 0)}
+        {thb(used, 0)}<span className="hidden sm:inline"> / {thb(data.budget_thb, 0)}</span>
       </span>
       {data.mock && (
         <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-oracle/20 text-oracle border border-oracle/40">

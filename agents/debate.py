@@ -49,7 +49,7 @@ async def run_debate(llm: LLM, model: str, ctx: Context, reports: list[AgentRepo
     digest = reports_digest(reports)
     turns: list[DebateArgument] = []
     for prompt, side, turn, limit in TURNS:
-        system = render(load_prompt(prompt), ticker=ctx.ticker, asset_type=ctx.asset_type,
+        system = render(load_prompt(prompt, ctx.prompt_version), ticker=ctx.ticker, asset_type=ctx.asset_type,
                         horizon=ctx.horizon, s_raw=f"{s_raw:+.2f}")
         user = "Analyst reports:\n" + digest
         if turns:

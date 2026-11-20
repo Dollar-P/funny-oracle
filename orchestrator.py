@@ -16,11 +16,11 @@ from typing import Callable
 
 import config
 from agents import REGISTRY
-from agents.base import Context
+from agents.base import Context, is_pro, load_prompt
 from agents.debate import run_debate
 from agents.judge import Judge
 from agents.news_researcher import NewsResearcher
-from core import cost, scoreboard
+from core import cost, data_quality, scoreboard
 from core.asset import classify, normalize
 from core.cost import BudgetGuard
 from core.events import NULL_SINK, EventSink, OnEvent
@@ -131,19 +131,28 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
                          save: bool = True, seed: int | None = None,
                          on_event: OnEvent | None = None, analyst_model: str | None = None,
                          judge_model: str | None = None, run_id: str | None = None,
-                         duel_id: str | None = None, think_preset: str | None = None) -> Prediction:
+                         duel_id: str | None = None, think_preset: str | None = None,
+                         prompt_version: str = "v1", temperature: float | None = None,
+                         experiment_id: int | None = None, as_of: datetime | None = None) -> Prediction:
     """One prediction end to end.
 
     on_event: async callback receiving every run event (REDESIGN §2.2); None → no events.
     analyst_model / judge_model: per-run override; None → the model from .env for that role.
     think_preset: local models only — "quick" (thinking off) or "deep" (LOCAL_LLM.md policy).
+    prompt_version / temperature / experiment_id: Pro mode (PRO.md §3.1, §6.4). The defaults ("v1", provider
+    default temperature, no experiment) are exactly the Arena's behaviour.
+    as_of: backtest mode (PRO.md §6.2) — the run is restricted to data that existed at `as_of`: no web search,
+    no News Researcher, prices truncated at `as_of`; the caller passes a point-in-time executor
+    (evaluation/pit_executor.py). Swing only.
     """
     run_id = run_id or uuid.uuid4().hex
     events = EventSink(on_event, run_id)
     try:
         return await _run(ticker, mode, horizon, progress=progress, source=source, llm=llm, executor=executor,
                           save=save, seed=seed, events=events, analyst_model=analyst_model,
-                          judge_model=judge_model, run_id=run_id, duel_id=duel_id, think_preset=think_preset)
+                          judge_model=judge_model, run_id=run_id, duel_id=duel_id, think_preset=think_preset,
+                          prompt_version=prompt_version, temperature=temperature, experiment_id=experiment_id,
+                          as_of=as_of)
     except cost.BudgetExceeded as e:
         await events.emit("error", message=str(e), fatal=True, kind="budget")
         raise
@@ -153,7 +162,8 @@ async def run_prediction(ticker: str, mode: str = "swing", horizon: str = "1M", 
 
 
 async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, seed, events: EventSink,
-               analyst_model, judge_model, run_id, duel_id, think_preset=None) -> Prediction:
+               analyst_model, judge_model, run_id, duel_id, think_preset=None, prompt_version="v1",
+               temperature=None, experiment_id=None, as_of=None) -> Prediction:
     t0 = time.perf_counter()
     say = progress or (lambda m: log.info(m))
     _validate(mode, horizon)
@@ -162,9 +172,19 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     hz = config.HORIZONS[mode][horizon]
     if llm is None:
         provider = config.provider_for(analyst_model) if analyst_model else None
-        llm = LLM(provider=provider, run_id=run_id, think_preset=think_preset)
-    elif think_preset:
-        llm.think_preset = think_preset
+        llm = LLM(provider=provider, run_id=run_id, think_preset=think_preset, temperature=temperature)
+    else:
+        if think_preset:
+            llm.think_preset = think_preset
+        if temperature is not None:
+            llm.temperature = temperature
+    load_prompt("_analyst", prompt_version)  # unknown prompt version → ValueError before any API call
+    if as_of is not None:
+        if mode != "swing":
+            raise ValueError("backtest mode (as_of) supports swing only")
+        if executor is None:
+            raise ValueError("backtest mode needs a point-in-time executor (evaluation.pit_executor)")
+        as_of = as_of.astimezone(timezone.utc)
     llm.run_id = run_id
     local = llm.provider == "local"
     if local and mode == "scalp":
@@ -196,7 +216,16 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     # price data for the quant engine (doesn't need the LLM)
     say(f"Fetching volatility history for {ticker}")
     lookback = config.SIGMA_LOOKBACK[mode]
-    px = await asyncio.to_thread(ds.fetch_ohlcv, ticker, hz["interval"], lookback if mode == "scalp" else "1y")
+    if as_of is None:
+        px = await asyncio.to_thread(ds.fetch_ohlcv, ticker, hz["interval"], lookback if mode == "scalp" else "1y")
+    else:  # point in time: only bars whose close was final at as_of, then the same 1-year window
+        from trading.calendar import bar_close_time
+
+        px = await asyncio.to_thread(ds.fetch_ohlcv, ticker, "1d", "10y")
+        done = [bar_close_time(asset, "1d", ts.to_pydatetime()) <= as_of for ts in px.index]
+        px = px[done].tail(253)
+        if len(px) < 30:
+            raise ValueError(f"not enough history before {as_of.date()} for {ticker}")
     sigma = sigma_per_bar(px["Close"])
     price_now = float(px["Close"].iloc[-1])
     sigma_source = f"per-bar {hz['interval']} over {lookback if mode == 'scalp' else '1y'}"
@@ -204,8 +233,12 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     if mode == "scalp":
         sigma, sigma_source = await _scalp_sigma(ticker, horizon, hz["minutes"], steps, sigma, sigma_source)
     say(f"σ per step {sigma:.5f} ({sigma_source})")
+    degraded = data_quality.check(px, mode, hz["interval"], asset, now=as_of) if is_pro(prompt_version) else []
+    if degraded:
+        say(f"Data quality: degraded ({', '.join(degraded)})")
 
-    ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"])
+    ctx = Context(ticker=ticker, asset_type=asset, mode=mode, horizon=horizon, interval=hz["interval"],
+                  prompt_version=prompt_version, as_of=as_of)
 
     async def run_one(ag) -> AgentReport:
         if agent_slots is not None:
@@ -231,11 +264,17 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     try:
         if mode == "swing":
             await events.emit("stage", name="news")
-        search_mode = await _search_mode(llm, models["analyst"], mode)
+        # backtest: no web search, no news (both are "as of now", not point in time — §4, §6.2)
+        search_mode = "off" if as_of is not None else await _search_mode(llm, models["analyst"], mode)
+        tools_exec = mc
+        if is_pro(prompt_version) and as_of is None:
+            from core.snapshots import SnapshotExecutor
+
+            tools_exec = SnapshotExecutor(mc, run_id)  # §4: snapshot every tool result used for the decision
         say(f"Search mode: {search_mode}")
         if search_mode in ("news_search", "news_tool", "news_web"):
             say("News Researcher gathering headlines")
-            nr = NewsResearcher(llm, models["analyst"], _AgentExecutor(mc, NewsResearcher.name, say, events),
+            nr = NewsResearcher(llm, models["analyst"], _AgentExecutor(tools_exec, NewsResearcher.name, say, events),
                                 {"news_search": "search", "news_tool": "tool", "news_web": "web"}[search_mode])
             ctx.news, _, _, err = await nr.run(ctx)
             if err:
@@ -245,7 +284,7 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
 
         await events.emit("stage", name="analysts")
         say(f"Running {len(active)} analysts in parallel: {', '.join(active)}")      # [3]
-        agents = [REGISTRY[a](llm, models["analyst"], _AgentExecutor(mc, a, say, events),
+        agents = [REGISTRY[a](llm, models["analyst"], _AgentExecutor(tools_exec, a, say, events),
                               enable_search=search_mode == "grounded", **analyst_kw) for a in active]
         reports = list(await asyncio.gather(*(run_one(ag) for ag in agents)))
         for r in reports:
@@ -287,7 +326,7 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
     forecast = simulate(price_now, sigma, steps, s_final, step_label=hz["interval"], seed=seed)
     say(f"Monte Carlo: P10 {forecast.p10:,.2f} | P50 {forecast.p50:,.2f} | P90 {forecast.p90:,.2f}")
 
-    now = datetime.now(timezone.utc)
+    now = as_of or datetime.now(timezone.utc)
     target_time = (now + timedelta(minutes=hz["minutes"])).isoformat(timespec="seconds")
     await events.emit("quant", price_now=forecast.price_now, p10=forecast.p10, p50=forecast.p50, p90=forecast.p90,
                       prob_up=forecast.prob_up, fan=forecast.fan, steps=forecast.steps,
@@ -301,6 +340,8 @@ async def _run(ticker, mode, horizon, *, progress, source, llm, executor, save, 
         cost_actual_usd=cost.run_cost_actual(run_id),
         elapsed_s=round(time.perf_counter() - t0, 1), search_mode=search_mode,
         models=models, run_id=run_id, duel_id=duel_id, think_preset=llm.think_preset if local else None,
+        prompt_version=prompt_version, temperature=llm.temperature, experiment_id=experiment_id, degraded=degraded,
+        as_of=as_of.isoformat(timespec="seconds") if as_of else None,
     )
     if save:                                                                            # [8]
         scoreboard.save(pred, run_id, source)

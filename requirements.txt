@@ -14,3 +14,5 @@ fastapi>=0.115          # web API (REDESIGN)
 uvicorn[standard]>=0.30
 sse-starlette>=3.0
 trafilatura>=2.0          # fetch_url MCP tool (local LLM web search)
+pandas_market_calendars>=5.0   # Pro: NYSE sessions for the paper broker
+hypothesis>=6.100        # Pro: property tests for the Risk Engine

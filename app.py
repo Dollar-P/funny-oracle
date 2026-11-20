@@ -68,7 +68,7 @@ def sync_sidebar(p: Prediction | None) -> None:
 if "_replay_sync" in ss:  # set by the Load button on the previous run
     sync_sidebar(ss.pop("_replay_sync"))
 if ss.pred is None and st.query_params.get("replay", "").isdigit():  # demo link: ?replay=<prediction id>
-    ss.pred = scoreboard.load(int(st.query_params["replay"]))
+    ss.pred = scoreboard.load(int(st.query_params["replay"]), "arena")
     sync_sidebar(ss.pred)
 
 
@@ -115,7 +115,7 @@ with st.sidebar:
         pick = st.selectbox("Replay a stored prediction (no API cost)", [None, *opts],
                             format_func=lambda i: "—" if i is None else opts[i])
         if pick is not None and st.button("Load", width="stretch"):
-            ss.pred = scoreboard.load(pick)
+            ss.pred = scoreboard.load(pick, "arena")
             ss["_replay_sync"] = ss.pred
             st.rerun()  # widgets above are already drawn; sync them on the next run
     st.warning("⚠ For education and fun. **Not investment advice.**")
