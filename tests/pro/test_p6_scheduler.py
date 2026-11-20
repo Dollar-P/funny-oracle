@@ -60,8 +60,9 @@ class FakeRunner:
     async def __call__(self, job, experiment_id, s):
         self.calls.append(job.key)
         now = self.clock()
-        df = sim_bars(job.ticker, job.asset_type, "1d", now)
-        price = float(df["Close"].iloc[-1])
+        # like yfinance live: the latest price includes the bar still in progress
+        df = DATA[job.ticker][1]
+        price = float(df[df.index <= now]["Close"].iloc[-1])
         pred = Prediction(
             created_at=now.isoformat(), ticker=job.ticker, asset_type=job.asset_type, mode="swing", horizon=job.horizon,
             target_time=(now + timedelta(days=7)).isoformat(), s_raw=0.8, s_final=0.8, confidence=0.8, weights={},

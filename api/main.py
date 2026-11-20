@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import config  # noqa: E402
 from api.routes import market, models, runs, scoreboard  # noqa: E402
+from api.routes import pro as pro_routes  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -27,6 +28,11 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(mes
 async def lifespan(_app: FastAPI):
     _seed_fresh_db()
     yield
+    from api import pro_state  # stop the Desk scheduler cleanly if it was started
+
+    sch = pro_state._STATE.get("scheduler")
+    if sch is not None and sch.running:
+        await sch.stop()
 
 
 app = FastAPI(title="Funny Oracle API", version="1.0", lifespan=lifespan,
@@ -34,7 +40,7 @@ app = FastAPI(title="Funny Oracle API", version="1.0", lifespan=lifespan,
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
-for r in (models.router, market.router, runs.router, scoreboard.router):
+for r in (models.router, market.router, runs.router, scoreboard.router, pro_routes.router):
     app.include_router(r, prefix="/api")
 
 
