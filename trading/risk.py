@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -143,11 +144,19 @@ def kelly_fraction_star(plan: TradePlan) -> float:
 def _floor_lot(qty: float, lot: Decimal) -> float:
     if qty <= 0 or not math.isfinite(qty):
         return 0.0
-    q = (Decimal(repr(qty)) / lot).to_integral_value(rounding=ROUND_FLOOR) * lot
+    q = (Decimal(repr(float(qty))) / lot).to_integral_value(rounding=ROUND_FLOOR) * lot
     return float(q)
 
 
-def _corr(a: pd.Series, b: pd.Series, n: int) -> float | None:
+def _corr(a, b, n: int) -> float | None:
+    """Pearson ρ of the last n overlapping returns (≥ 20 needed). Series are aligned on their index; numpy arrays
+    must already be aligned (same length, NaN where an asset has no bar)."""
+    if isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
+        m = np.isfinite(a) & np.isfinite(b)
+        x, y = a[m][-n:], b[m][-n:]
+        if len(x) < 20 or x.std() == 0 or y.std() == 0:
+            return None
+        return float(np.corrcoef(x, y)[0, 1])
     j = pd.concat([a, b], axis=1, join="inner").dropna().tail(n)
     if len(j) < 20:
         return None

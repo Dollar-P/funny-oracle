@@ -131,7 +131,7 @@ class Bracket:
     def _exit(self, ts, role: str, qty: float, raw: float, slip: bool) -> Fill:
         qty = min(qty, self.qty_open)
         f = self._fill(ts, role, qty, raw, slip)
-        self.qty_open = float(Decimal(repr(self.qty_open)) - Decimal(repr(qty)))
+        self.qty_open = float(Decimal(repr(float(self.qty_open))) - Decimal(repr(float(qty))))
         if self.qty_open <= 0:
             self.qty_open = 0.0
             self.state = "closed"

@@ -123,6 +123,18 @@ def test_correlation_guard():
     assert size_plan(long_plan(), pf(positions=[xom], returns=rets), RP, sigma_annual=0.1).approved
 
 
+def test_correlation_on_aligned_numpy_arrays():
+    from trading.risk import _corr
+
+    rng = np.random.default_rng(3)
+    a = rng.normal(0, 0.01, 100)
+    b = a + rng.normal(0, 0.001, 100)
+    a[::7] = np.nan                                   # missing bars (e.g. weekends for a stock)
+    assert _corr(a, b, 60) > 0.95
+    assert _corr(a[:15], b[:15], 60) is None          # < 20 overlapping returns
+    assert _corr(np.zeros(50), b[:50], 60) is None    # constant series
+
+
 def test_kelly_cap_only_after_100_calibrated():
     plan = long_plan(prob_up=0.5)   # p 0.5, b = 0.5·0.4 + 0.5·1.8 = 1.1 → f* = 0.5 − 0.5/1.1 = 0.04545
     plan = plan.model_copy(update={"calibrated": True})

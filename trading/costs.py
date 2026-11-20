@@ -48,5 +48,6 @@ def round_trip_cost_per_unit(price: float, cm: CostModel) -> float:
 
 def money(x) -> Decimal:
     """Float/str → Decimal cents (half-up). Floats go through repr so 0.1 stays 0.1."""
+    # repr(float(x)): numpy 2 scalars repr as "np.float64(…)", so always convert to a plain float first
     d = x if isinstance(x, Decimal) else Decimal(repr(float(x))) if isinstance(x, float) else Decimal(str(x))
     return d.quantize(CENT, rounding=ROUND_HALF_UP)

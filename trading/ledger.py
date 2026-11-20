@@ -69,7 +69,7 @@ class Ledger:
     def apply(self, key: str, f: Fill) -> None:
         self.cash += cash_flow(f)
         signed = f.qty if f.side == "buy" else -f.qty
-        q = Decimal(repr(self.qty.get(key, 0.0))) + Decimal(repr(signed))
+        q = Decimal(repr(float(self.qty.get(key, 0.0)))) + Decimal(repr(float(signed)))
         if q == 0:
             self.qty.pop(key, None)
         else:

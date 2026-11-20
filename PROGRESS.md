@@ -26,7 +26,7 @@
 | P2 | Signal Engine + cost model | ✅ | `tests/pro/test_p2_signals.py` (26): bps defaults and overrides, slippage direction, fees to the cent (half-up), round-trip cost; long and short geometry + EV checked by hand (e.g. long 100 / P10 90 / P50 104 / P90 118 / ATR 4 → stop 90, R:R 1.8, cost 0.004 R, EV +0.298 R); ATR vs band stop; band edge on the wrong side ignored; scalp k=1; every FLAT rule in isolation; inclusive thresholds; EV = 0 → FLAT; costs flip EV (crypto); crypto short gate; catalyst window boundary; calibrator use; ATR uses no future bar |
 | P3 | Risk Engine | ✅ | `tests/pro/test_p3_risk.py` (14): hypothesis property test (1,000 random portfolios × plans × parameter sets; ~35 % approved, every cap seen binding) — an approved plan never exceeds risk per trade, max position, vol cap, gross, asset-class cap, open-position count, breakers or the Kelly cap; every rejection carries a known rule and a detail; a halted account never approves (100 cases); a Kelly property test (300 cases). Hand-checked sizing (0.5 % / 0.25 % risk, lot rounding down, each cap binding), breakers, duplicate ticker, correlation guard (ρ ≈ 0.99 same side → rejected only when combined risk > 1 %), Kelly only at calibration n ≥ 100, rejections written to `risk_events` |
 | P4 | Paper Broker + Ledger + trading calendar | ✅ | `tests/pro/test_p4_broker.py` (23), synthetic bars with hand-computed fills: next-open entry (never the signal bar; a decision after Monday's close fills at Tuesday's 14:30 UTC open), entry gap past stop/T1 cancels, limit entry, expiry, gap through stop fills at the open (−751.85 / −1.50 R), T1 → breakeven → stop (+99.00), T2 cancels the stop (OCO), gap through targets, intrabar ambiguity = stop and 1m resolver (failure → stop), time exit, crypto fees/slippage to the cent (+384.60, costs 15.40), short mirror, MAE/MFE, 1-share T1, state round trip; ledger: equity = cash + Σ qty × mark every bar and `reconcile()` = 0.00 exactly, cash − start = Σ realised P&L; persistent account: restart never re-feeds a bar, order statuses (OCO cancelled), equity snapshot 100,204.00 reconciles with the fills; calendar: Thanksgiving, early close, DST, weekends, gold Sunday open, bar open/close times |
-| P5 | Baselines + quant backtester + metrics + stats | | |
+| P5 | Baselines + quant backtester + metrics + stats | ✅ | `tests/pro/test_p5_metrics.py` (13): Sharpe √75/30, Sortino √300/30, vol, CAGR, max DD, Calmar, expectancy, profit factor, beta, IR, Brier, log loss, pinball, band coverage, reliability bins, Wilson 8/10 = (0.490, 0.943), block-bootstrap coverage ≥ 88 % on iid data, paired bootstrap, non-overlapping selection, percentile rank, Metric labels. `tests/pro/test_p5_backtest.py` (12): buy & hold by hand (119,936.04), cash, engine reconciles to 0.00 and final equity = start + Σ P&L, momentum/SMA/random (seeded), quant-only through the Signal Engine, analytic forecast = Monte Carlo (0.5 %), max-DD halt for good; **lookahead**: a next-bar oracle is ≈ 50 % on the real view and > 95 % on a deliberately leaky view; **speed**: buy & hold + momentum + 1,000 random runs over 3 years × 3 assets in ≈ 27 s (< 60 s) |
 | P6 | Scheduler + forward paper loop + model routing and budgets | | |
 | P7 | LLM backtest mode with leakage rules + calibration | | |
 | P8 | Pro API + SSE events | | |
@@ -83,6 +83,24 @@
   rebuilds cash from the fills table and stores each bracket's state plus its last processed bar.
   Callers must only feed *completed* bars (close time ≤ now): a partial bar would be skipped later.
 - **Gold hours** are approximated (Sun 18:00 → Fri 17:00 New York, daily break ignored).
+- **Backtester** (P5, `evaluation/backtest.py`): one engine for every strategy — same Risk Engine, `Bracket`
+  fills, costs and Decimal ledger as the forward loop. Per union date: bars → fills, mark at the last known
+  closes (one equity point per date, stamped 00:00 UTC of that date, valued at that date's closes), then
+  decisions at the close through a `PointInTimeView` (bars ≤ the decision bar only). Decisions per ticker every
+  `horizon` bars (non-overlapping) and only when the ticker is flat. Annualisation: 365 periods/year if the
+  portfolio holds crypto (daily points every day), else 252. A max-drawdown halt lasts to the end of the
+  backtest (no manual reset). σ = 0 → `no_volatility` rejection.
+- **Baselines** (P5, `evaluation/baselines.py`): momentum (sign of the 63-bar return), SMA 50/200, random
+  (seeded; 1,000 runs in parallel processes) use the Signal Engine's stop rule for a zero-drift forecast (wider
+  of k·ATR and the P10/P90 band edge), no targets, time exit at the horizon. Quant-only = deterministic label
+  score (SMA regime 0.30, trend vs SMA200 0.20, vs SMA50 0.20, MACD momentum 0.20, RSI zone 0.10) with
+  confidence 0.6 and the **closed-form** log-normal forecast (equal to the Monte Carlo in expectation, tested to
+  0.5 %) → full Signal Engine. Buy & hold = equal-weight basket at the first open, not risk-sized (a benchmark).
+- **Statistics** (P5, `evaluation/stats.py`): Wilson 95 % CI; circular moving-block bootstrap, block ⌈n^(1/3)⌉,
+  2,000 resamples, seeded; paired bootstrap for differences; greedy non-overlapping selection per asset;
+  `MIN_N` = 30 → "insufficient data". Ratios on a series with σ < 1e-12 per period are reported as 0.
+- **numpy 2**: `repr(np.float64(x))` is `"np.float64(x)"`, so every Decimal conversion goes through
+  `repr(float(x))`.
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues
