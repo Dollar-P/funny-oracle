@@ -23,7 +23,7 @@
 | # | Checkpoint | Status | Verified by |
 |---|---|---|---|
 | P1 | Branch, DB migration, experiments, richer agent fields, prompts v1/v2, `MODEL_CUTOFFS` | ✅ | `tests/pro/test_p1_foundation.py` (13): v1 prompts byte-identical to `main` (sha256 per file); Arena LLM-facing JSON schemas identical to `main` (hash per schema); Arena run (Gemini fake) has v1 text, no Pro fields, no temperature; v2 run on the Gemini fake and on a mocked local backend returns scenario probs (normalised), key levels, invalidation, thesis, catalysts, no-trade reason; temperature reaches both backends; `prompt_version` / `experiment_id` stored; old-schema DB migrated additively; experiment hash stable under key order; `MODEL_CUTOFFS` env override; data-quality flags. Full suite 227 passed; `npm run build` OK |
-| P2 | Signal Engine + cost model | | |
+| P2 | Signal Engine + cost model | ✅ | `tests/pro/test_p2_signals.py` (26): bps defaults and overrides, slippage direction, fees to the cent (half-up), round-trip cost; long and short geometry + EV checked by hand (e.g. long 100 / P10 90 / P50 104 / P90 118 / ATR 4 → stop 90, R:R 1.8, cost 0.004 R, EV +0.298 R); ATR vs band stop; band edge on the wrong side ignored; scalp k=1; every FLAT rule in isolation; inclusive thresholds; EV = 0 → FLAT; costs flip EV (crypto); crypto short gate; catalyst window boundary; calibrator use; ATR uses no future bar |
 | P3 | Risk Engine | | |
 | P4 | Paper Broker + Ledger + trading calendar | | |
 | P5 | Baselines + quant backtester + metrics + stats | | |
@@ -53,6 +53,16 @@
 - **Model cutoffs** (P1): every entry in `config.MODEL_CUTOFFS` is `None` (unknown) for now, so every
   historical date is contaminated until a cutoff is filled in (from the model card, or `MODEL_CUTOFFS` JSON in
   `.env`). Deliberately conservative.
+- **Signal Engine** (P2, `trading/signals.py`): R:R = distance to **T2** / stop distance; EV uses the bracket
+  payoff 0.5·R1 + 0.5·R2 on a win and −1 R on a loss, minus round-trip costs in R. Without a calibrator,
+  p = P(up) (long) or 1 − P(up) (short), flagged `calibrated=false` — a rough proxy for P(target before stop).
+  |EV| ≤ 1e-9 counts as zero (FLAT). The band stop (P10 for longs, P90 for shorts) only counts when it is on the
+  adverse side of entry. FLAT reasons are a fixed vocabulary checked in a fixed order; the plan keeps its
+  geometry so the UI can explain a FLAT. A Judge `no_trade_reason` forces FLAT (`judge_no_trade`). Catalyst
+  dates are days: a high-impact event dated between the decision day and the end of the first 10 % of the
+  horizon forces FLAT; unparseable dates are ignored.
+- **Costs** (P2, `trading/costs.py`): bps per side from `config.PRO_COSTS_BPS`; slippage worsens the fill price,
+  fee = bps × fill notional rounded half-up to the cent.
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues

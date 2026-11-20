@@ -244,3 +244,13 @@ def _cutoffs() -> dict[str, date | None]:
 
 
 MODEL_CUTOFFS = _cutoffs()
+
+# Pro cost model (PRO.md §3.4), bps per side. Gold trades via the GC=F / GLD proxy.
+PRO_COSTS_BPS = {
+    "stock": {"fee": 0.0, "slippage": 2.0},
+    "gold": {"fee": 0.0, "slippage": 3.0},
+    "crypto": {"fee": 10.0, "slippage": 5.0},
+}
+# Signal Engine defaults (PRO.md §3.2)
+PRO_SIGNAL = {"s_min": 0.15, "conf_min": 0.5, "rr_min": 1.5, "k_atr_swing": 1.5, "k_atr_scalp": 1.0,
+              "catalyst_window": 0.10, "allow_crypto_short": _bool("ALLOW_CRYPTO_SHORT", False), "atr_period": 14}
