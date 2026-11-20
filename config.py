@@ -254,3 +254,9 @@ PRO_COSTS_BPS = {
 # Signal Engine defaults (PRO.md §3.2)
 PRO_SIGNAL = {"s_min": 0.15, "conf_min": 0.5, "rr_min": 1.5, "k_atr_swing": 1.5, "k_atr_scalp": 1.0,
               "catalyst_window": 0.10, "allow_crypto_short": _bool("ALLOW_CRYPTO_SHORT", False), "atr_period": 14}
+# Risk Engine defaults (PRO.md §3.3); fractions of equity
+PRO_RISK = {"risk_pct_swing": 0.005, "risk_pct_scalp": 0.0025, "vol_target": 0.15, "max_position": 0.20,
+            "max_gross": 1.0, "max_class": {"stock": 0.60, "crypto": 0.30, "gold": 0.30}, "max_open": 8,
+            "corr_max": 0.8, "corr_combined_risk": 0.01, "corr_lookback": 60, "daily_loss": -0.02,
+            "max_dd": -0.10, "kelly_fraction": 0.25, "kelly_min_n": 100}
+PRO_STARTING_EQUITY = float(_env("PRO_STARTING_EQUITY", "100000"))

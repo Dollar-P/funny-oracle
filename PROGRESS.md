@@ -24,7 +24,7 @@
 |---|---|---|---|
 | P1 | Branch, DB migration, experiments, richer agent fields, prompts v1/v2, `MODEL_CUTOFFS` | ✅ | `tests/pro/test_p1_foundation.py` (13): v1 prompts byte-identical to `main` (sha256 per file); Arena LLM-facing JSON schemas identical to `main` (hash per schema); Arena run (Gemini fake) has v1 text, no Pro fields, no temperature; v2 run on the Gemini fake and on a mocked local backend returns scenario probs (normalised), key levels, invalidation, thesis, catalysts, no-trade reason; temperature reaches both backends; `prompt_version` / `experiment_id` stored; old-schema DB migrated additively; experiment hash stable under key order; `MODEL_CUTOFFS` env override; data-quality flags. Full suite 227 passed; `npm run build` OK |
 | P2 | Signal Engine + cost model | ✅ | `tests/pro/test_p2_signals.py` (26): bps defaults and overrides, slippage direction, fees to the cent (half-up), round-trip cost; long and short geometry + EV checked by hand (e.g. long 100 / P10 90 / P50 104 / P90 118 / ATR 4 → stop 90, R:R 1.8, cost 0.004 R, EV +0.298 R); ATR vs band stop; band edge on the wrong side ignored; scalp k=1; every FLAT rule in isolation; inclusive thresholds; EV = 0 → FLAT; costs flip EV (crypto); crypto short gate; catalyst window boundary; calibrator use; ATR uses no future bar |
-| P3 | Risk Engine | | |
+| P3 | Risk Engine | ✅ | `tests/pro/test_p3_risk.py` (14): hypothesis property test (1,000 random portfolios × plans × parameter sets; ~35 % approved, every cap seen binding) — an approved plan never exceeds risk per trade, max position, vol cap, gross, asset-class cap, open-position count, breakers or the Kelly cap; every rejection carries a known rule and a detail; a halted account never approves (100 cases); a Kelly property test (300 cases). Hand-checked sizing (0.5 % / 0.25 % risk, lot rounding down, each cap binding), breakers, duplicate ticker, correlation guard (ρ ≈ 0.99 same side → rejected only when combined risk > 1 %), Kelly only at calibration n ≥ 100, rejections written to `risk_events` |
 | P4 | Paper Broker + Ledger + trading calendar | | |
 | P5 | Baselines + quant backtester + metrics + stats | | |
 | P6 | Scheduler + forward paper loop + model routing and budgets | | |
@@ -63,6 +63,14 @@
   horizon forces FLAT; unparseable dates are ignored.
 - **Costs** (P2, `trading/costs.py`): bps per side from `config.PRO_COSTS_BPS`; slippage worsens the fill price,
   fee = bps × fill notional rounded half-up to the cent.
+- **Risk Engine** (P3, `trading/risk.py`): pure `size_plan(plan, portfolio, params)`. Exposure at the current
+  mark; open risk = qty × distance from mark to the current stop. The quantity is the minimum of the risk-based
+  size and every cap, then rounded **down** to the lot (stocks 1 share, gold 0.01, crypto 0.0001); every limit is
+  re-checked on the final quantity. A cap with no room rejects with that cap's rule. One open position per
+  ticker (`duplicate_position`), which also gives "at most one open scalp position per asset". Correlation:
+  Pearson ρ of the last 60 daily returns (≥ 20 overlapping), same direction only. Kelly cap: f* = p − (1−p)/b with
+  b = 0.5·R1 + 0.5·R2, active only for calibrated plans once calibration n ≥ 100; f* ≤ 0 rejects. A drawdown
+  ≤ −10 % rejects with `halt=true`; the caller persists the halt until a manual reset.
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues
