@@ -1,21 +1,23 @@
 # Progress
 
-## Current state (2026-11-20, branch `pro`)
+## Current state (2026-11-20, `main`)
 
 - **Arena** (REDESIGN.md) and the **original build** (ARCHITECTURE.md) are done and on `main`; **Local LLM** is merged.
-- **Pro — "The Desk"** (PRO.md) is implemented on branch `pro` (not merged): Signal Engine, Risk Engine, paper
+- **Pro — "The Desk"** (PRO.md) is **merged into `main`** (merge commit `6a85896`, `--no-ff`, 2026-11-20): Signal Engine, Risk Engine, paper
   broker + Decimal ledger, scheduler with model routing and budgets, LLM backtests with contamination rules,
   calibration, Evaluation Lab + reports, `/api/pro/*` + SSE, and the Desk UI at `/pro` with an Arena ↔ Desk switch.
 - **Arena and Pro are separate worlds** (merge prep, `core/worlds.py`): Arena views never show `source = 'pro'`
   predictions, Pro views read only them; Arena JSON is byte-identical to `main` on the real DB.
 - **Tests:** `pytest -q` → **359 passed** (214 existing + 145 Pro); `web/e2e/pro.mjs` 35/35 on the demo dataset;
   Arena `mobile.mjs` 4/4, `show.mjs`, `replay.mjs`, `r7.mjs` OK on a copy of the real DB; `npm run build` OK.
-- **Ready to merge** (not merged); run commands for demo and real mode are in the README "Pro mode" section.
+- **Merged**: `pytest -q` 359 passed and `npm run build` OK on `main` after the merge. Safety tag `pre-pro-merge`
+  = `df82d0c` (`main` before the merge). Run commands for demo and real mode: README "Pro mode".
 - **Spend:** ฿27.39 tracked / ฿17.23 estimated actual of ฿100 (Pro P10 used **6 paid runs, ฿5.23 tracked**).
 - **Still to do (yours):** the real overnight scheduler batch on the **local** model. LM Studio is now reachable
   (`GET /api/models` 2026-11-20: `local:prism-ml/bonsai-27b` available); the scheduler has not been started. See
   "P10 — what remains". Database backup before merge prep: `data/oracle.db.bak-20261120` (git-ignored).
-- `main` is on GitHub; `pro` is local only. The local branch `backup/pre-rewrite` must never be pushed.
+- `main` and the tag `pre-pro-merge` are on GitHub; `pro` stays local for the forward test (never pushed). The
+  local branch `backup/pre-rewrite` must never be pushed.
 
 ## Docs
 
@@ -109,10 +111,12 @@ Exact PowerShell commands: README → "Pro mode" → "Real mode".
 6. **Arena on a phone**: the coin meter now shows only the amount spent below 640 px (the cap is in its tooltip),
    and the nav icons are 4 px tighter, so the bar fits one line with the Desk icon (it wrapped to 3 lines).
 
-## Merge plan (`pro` → `main`) — not merged
+## Merge plan (`pro` → `main`) — ✅ merged (`6a85896`)
 
-Status 2026-11-20 (merge prep): steps 1 and 3 are done and green; Pro is separated from the Arena; the Hall of
-Fame decision is made (Pro hidden). What is left is step 4, when you decide.
+Done 2026-11-20: merged with `git merge --no-ff pro` as `6a85896` ("Merge pro: Funny Oracle Pro (The Desk)"),
+tests and build green on `main`, pushed `main` + tag `pre-pro-merge`. Roll back:
+`git checkout main && git reset --hard pre-pro-merge` (and `git push --force-with-lease origin main` only if the
+merge must be removed from GitHub too). **Still open: the overnight batch on the local model** (P10, below).
 
 1. Rebase/merge `main` into `pro` first. Done: `git merge main` → already up to date (`main` = `origin/main` =
    `df82d0c`, the branch point). Repeat right before merging if `main` moves.
