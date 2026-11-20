@@ -1,5 +1,7 @@
 # 🔮 Funny Oracle
 
+![The Oracle Arena: a real BTC swing show, from the analysts' scores through the debate to the verdict and forecast](docs/arena_verdict_real.png)
+
 Five AI analysts argue about whether a stock, a coin or gold goes up or down — then a Monte Carlo
 simulation turns their verdict into a price range, and a scoreboard checks them against a coin flip.
 
@@ -57,12 +59,12 @@ The original Streamlit app is still supported as a fallback:
 
 ## Setup (Windows / PowerShell)
 
-Requirements: **Python 3.14** and **Node.js** (LTS is fine; only for the web UI). Developed on Windows; the
-commands below are PowerShell.
+Requirements: **Python 3.11 or newer** (developed on 3.14; the full test suite also passes on 3.11) and
+**Node.js** (LTS is fine; only for the web UI). Developed on Windows; the commands below are PowerShell.
 
 ```powershell
-git clone <this repo>; cd funny-price-prediction-project
-py -3.14 -m venv .venv
+git clone https://github.com/Dollar-P/funny-oracle.git; cd funny-oracle
+py -3 -m venv .venv          # any Python >= 3.11, e.g. py -3.14
 .venv\Scripts\python -m pip install -r requirements.txt
 copy .env.example .env      # for real runs fill in GEMINI_API_KEY (FRED_API_KEY optional); mock mode needs no key
 cd web; npm install; cd ..  # web UI
@@ -199,6 +201,12 @@ node e2e\mobile.mjs http://localhost:5173 <outDir> 10              # 390 px: no 
 Start Auto-Scalp (Hall of Fame, or `scripts\auto_scalp.py`) at least an hour beforehand so there are
 evaluated predictions. No network or budget on the day? Run in mock mode, or open `/p/<id>` →
 **▶ Replay the show**.
+
+## Roadmap
+
+- **Pro / paper-trading mode** (planned; spec in `PRO.md`).
+- **Local models, Deep preset:** implemented and unit-tested, but not yet verified with a real run (Quick is
+  verified; see `LOCAL_LLM.md`).
 
 ## Disclaimer
 
