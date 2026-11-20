@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 
 from api import pro_state
 from api.routes.pro.common import bad, experiment, now, one, rows
-from core import pro_settings
+from core import cost, pro_settings
 from evaluation import metrics as M
 from evaluation import stats as S
 from trading.broker_paper import Bracket
@@ -219,7 +219,11 @@ def overview():
         "sharpe": sharpe, "halted": bool(s.get("halted")),
         "daily_loss_tripped_today": any(x["rule"] == "daily_loss" and x["ts"] >= day0 for x in tripped),
         "breaker_events": tripped, "spent_today_thb": round(SCH.spent_today_thb(t), 2),
-        "daily_budget_thb": s["budgets"]["daily_thb"], "approval": s["approval"], "signal_counts": counts,
+        "daily_budget_thb": s["budgets"]["daily_thb"],
+        # Pro spend on its own; the real budget cap (config.BUDGET_THB) is one combined figure for Arena + Pro
+        "pro_spent_total_thb": round(SCH.pro_spent_thb(), 2),
+        "combined_spent_thb": round(cost.usd_to_thb(cost.spent_usd()), 2),
+        "combined_budget_thb": cost.BudgetGuard().budget_thb, "approval": s["approval"], "signal_counts": counts,
         "scheduler": {"running": bool(sch and sch.running), "last_tick": sch.last_tick.isoformat() if sch and sch.last_tick else None},
         "risk_limits": {"max_dd": s["risk"]["max_dd"], "daily_loss": s["risk"]["daily_loss"]},
         "as_of": t.isoformat(timespec="seconds"),

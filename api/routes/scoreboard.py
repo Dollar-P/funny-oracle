@@ -15,6 +15,7 @@ from core import cost, scoreboard
 from core.autoscalp import HORIZON, MODE, TICKER, AutoScalpState, tick
 from core.cost import BudgetGuard
 from core.db import connect
+from core.worlds import ARENA_ONLY
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -36,7 +37,7 @@ def model_leaderboard() -> list[dict]:
     with connect() as conn:
         rows = [dict(r) for r in conn.execute(
             "SELECT id, analyst_model, duel_id, mode, price_now, p10, p50, p90, prob_up, cost_usd, cost_actual_usd,"
-            " actual_price, prediction_json FROM predictions").fetchall()]
+            f" actual_price, prediction_json FROM predictions WHERE {ARENA_ONLY}").fetchall()]
     fallback = _analyst_model_by_usage()
     by_model: dict[str, dict] = {}
     duels: dict[str, list[dict]] = {}
@@ -86,7 +87,8 @@ def model_leaderboard() -> list[dict]:
 def pending() -> list[dict]:
     with connect() as conn:
         rows = conn.execute("SELECT id, ticker, mode, horizon, created_at, target_time, price_now, p50, prob_up,"
-                            " analyst_model FROM predictions WHERE actual_price IS NULL ORDER BY target_time"
+                            f" analyst_model FROM predictions WHERE actual_price IS NULL AND {ARENA_ONLY}"
+                            " ORDER BY target_time"
                             " LIMIT 50").fetchall()
     return [dict(r) for r in rows]
 

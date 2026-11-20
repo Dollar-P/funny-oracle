@@ -131,7 +131,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Backfill models for rows saved before the columns existed: most-used model in llm_usage.
     for col, agents in (("analyst_model", ANALYST_AGENTS), ("judge_model", ("judge",))):
         marks = ",".join("?" * len(agents))
-        conn.execute(
+        conn.execute(  # any-world: migration backfill
             f"UPDATE predictions SET {col} = (SELECT u.model FROM llm_usage u WHERE u.prediction_id = predictions.id"
             f" AND u.agent IN ({marks}) GROUP BY u.model ORDER BY COUNT(*) DESC LIMIT 1) WHERE {col} IS NULL",
             agents)

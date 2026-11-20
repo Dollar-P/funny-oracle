@@ -35,7 +35,12 @@ export default function Overview() {
         <Kpi label="Drawdown" value={<span className="num">{pctf(o.drawdown)}</span>} sub={`halt at ${pctf(ddLimit, 0)}`} />
         <Kpi label="Sharpe (daily, annualised)" value={<MetricCell m={o.sharpe} showBadge={false} />}
           sub={o.sharpe.sufficient ? "block-bootstrap 95 % CI" : <Badge tone="warn">insufficient data</Badge>} />
-        <Kpi label="LLM spend today" value={<span className="num">฿{num(o.spent_today_thb)}</span>} sub={`of ฿${num(o.daily_budget_thb)} daily budget`} />
+        <Kpi label="Pro LLM spend today" value={<span className="num">฿{num(o.spent_today_thb)}</span>}
+          sub={<>
+            <div>of ฿{num(o.daily_budget_thb, 0)} daily · Pro total ฿{num(o.pro_spent_total_thb)}</div>
+            <div title="The real budget cap counts Arena and Pro together; Arena stats never include Pro spend">
+              shared cap (Arena + Pro) ฿{num(o.combined_spent_thb)} / ฿{num(o.combined_budget_thb, 0)}</div>
+          </>} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">

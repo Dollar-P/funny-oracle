@@ -45,7 +45,6 @@ export default function SignalDetail() {
             <Btn tone="danger" onClick={() => act.mutate(false)} disabled={act.isPending}>Reject</Btn>
           </>
         )}
-        {q.data.replay_url && <Link to={q.data.replay_url} className="text-[12px] text-desk-accent hover:underline">Arena replay →</Link>}
       </div>
       {act.isError && <div role="alert" className="panel px-3 py-2 text-[12px] text-desk-down">{(act.error as Error).message}</div>}
 

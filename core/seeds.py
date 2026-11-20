@@ -12,6 +12,7 @@ from pathlib import Path
 
 import config
 from core.db import connect
+from core.worlds import ARENA_ONLY
 
 SEEDS_PATH = config.ROOT / "data" / "seeds.json"
 FORMAT = 1
@@ -26,7 +27,8 @@ def export(ids: list[int], path: Path = SEEDS_PATH) -> dict:
     with connect() as conn:
         marks = ",".join("?" * len(ids))
         preds = [dict(r) for r in conn.execute(
-            f"SELECT {', '.join(PRED_COLS)} FROM predictions WHERE id IN ({marks}) ORDER BY id", ids)]
+            f"SELECT {', '.join(PRED_COLS)} FROM predictions WHERE id IN ({marks}) AND {ARENA_ONLY} ORDER BY id",
+            ids)]
         agents = [dict(r) for r in conn.execute(
             f"SELECT {', '.join(AGENT_COLS)} FROM agent_outputs WHERE prediction_id IN ({marks})"
             " ORDER BY prediction_id, rowid", ids)]
@@ -54,8 +56,8 @@ def load(path: Path = SEEDS_PATH) -> dict:
         raise ValueError(f"unsupported seeds format {doc.get('format')!r}")
     loaded, skipped = [], []
     with connect() as conn:
-        taken = {r[0] for r in conn.execute("SELECT id FROM predictions")}
-        runs = {r[0] for r in conn.execute("SELECT run_id FROM predictions WHERE run_id IS NOT NULL")}
+        taken = {r[0] for r in conn.execute("SELECT id FROM predictions")}  # any-world: id collisions
+        runs = {r[0] for r in conn.execute("SELECT run_id FROM predictions WHERE run_id IS NOT NULL")}  # any-world
         for p in doc["predictions"]:
             if p["id"] in taken or (p.get("run_id") and p["run_id"] in runs):
                 skipped.append(p["id"])
@@ -75,5 +77,5 @@ def load_if_empty(path: Path = SEEDS_PATH) -> dict | None:
     if not Path(path).exists():
         return None
     with connect() as conn:
-        n = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]  # any-world: never touch a DB in use
     return load(path) if n == 0 else None

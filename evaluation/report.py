@@ -26,6 +26,7 @@ import pandas as pd
 import config
 from core import pro_settings
 from core.db import connect
+from core.worlds import PRO_ONLY
 from core.schemas import Prediction
 from evaluation import ablation
 from evaluation import metrics as M
@@ -52,7 +53,7 @@ def _sharpe_metric(r: np.ndarray, ppy: int, n_boot: int, min_n: int = S.MIN_N) -
 
 def _pro_predictions(experiment_id: int) -> list[tuple[Prediction, float | None]]:
     with connect() as conn:
-        rows = conn.execute("SELECT prediction_json, actual_price FROM predictions WHERE source = 'pro' AND"
+        rows = conn.execute(f"SELECT prediction_json, actual_price FROM predictions WHERE {PRO_ONLY} AND"
                             " experiment_id = ? ORDER BY created_at", (experiment_id,)).fetchall()
     out = []
     for pj, actual in rows:

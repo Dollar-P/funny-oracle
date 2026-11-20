@@ -107,7 +107,7 @@ async def run_llm_backtest(cfg: LLMBacktestConfig, history: dict[str, pd.DataFra
     if cfg.max_runs is not None:
         todo = todo[: cfg.max_runs]
     paid = not cost.is_free(cfg.model)
-    est = cost.usd_to_thb(cost.BudgetGuard().estimate_usd("swing", cfg.model)) * len(todo) if paid else 0.0
+    est = cost.usd_to_thb(cost.BudgetGuard().estimate_usd("swing", cfg.model, world="pro")) * len(todo) if paid else 0.0
     if paid and todo and not cfg.confirm_cost:
         raise CostConfirmationRequired(est, len(todo), cfg.model)
 

@@ -18,6 +18,7 @@ from core import cost, scoreboard
 from core.asset import normalize
 from core.cost import BudgetGuard
 from core.db import connect
+from core.worlds import ARENA, ARENA_ONLY, PRO
 from mcp_server import data_sources as ds
 
 log = logging.getLogger(__name__)
@@ -162,7 +163,8 @@ async def create_prediction(req: PredictionRequest, mock: int | None = Query(Non
 def _stored_models(pid: int) -> dict | None:
     """Models from the DB columns (rows saved before R1 have none in their JSON; backfilled by the migration)."""
     with connect() as conn:
-        row = conn.execute("SELECT analyst_model, judge_model FROM predictions WHERE id = ?", (pid,)).fetchone()
+        row = conn.execute("SELECT analyst_model, judge_model FROM predictions WHERE id = ?",  # any-world: after load
+                           (pid,)).fetchone()
     if row and row["analyst_model"]:
         return {"analyst": row["analyst_model"], "judge": row["judge_model"] or row["analyst_model"]}
     return None
@@ -210,7 +212,9 @@ async def run_events(run_id: str, request: Request, after: int = 0):
 
 @router.get("/runs")
 async def runs():
-    return {"active": [r.summary() for r in MANAGER.active()], "max_concurrent": MANAGER.max_concurrent}
+    # Pro (Desk) scheduler runs share the run slots but are not Arena runs
+    return {"active": [r.summary() for r in MANAGER.active() if r.params.get("source") != PRO],
+            "max_concurrent": MANAGER.max_concurrent}
 
 
 # --- stored predictions -----------------------------------------------------------
@@ -223,7 +227,7 @@ LIST_COLS = ("id, run_id, created_at, ticker, asset_type, mode, horizon, target_
 @router.get("/predictions")
 async def list_predictions(limit: int = Query(50, le=500), ticker: str | None = None, mode: str | None = None,
                            model: str | None = None):
-    q, params = f"SELECT {LIST_COLS} FROM predictions WHERE 1=1", []
+    q, params = f"SELECT {LIST_COLS} FROM predictions WHERE {ARENA_ONLY}", []
     if ticker:
         q += " AND ticker = ?"
         params.append(normalize(ticker))
@@ -243,11 +247,12 @@ async def list_predictions(limit: int = Query(50, le=500), ticker: str | None = 
 @router.get("/predictions/{pid}")
 async def get_prediction(pid: int, evaluate: bool = False):
     """evaluate=1: if the target time has passed and there is no actual price yet, try to fetch it now."""
-    p = scoreboard.load(pid)
+    p = scoreboard.load(pid, ARENA)   # Pro predictions live in the Desk (/api/pro/signals/{id})
     if p is None:
         raise HTTPException(404, f"prediction {pid} not found")
     if evaluate:
         with connect() as conn:
+            # any-world: the Arena load above already refused Pro ids
             row = conn.execute("SELECT actual_price, target_time FROM predictions WHERE id = ?", (pid,)).fetchone()
         if row["actual_price"] is None and row["target_time"] <= scoreboard.utcnow().isoformat():
             try:
@@ -256,7 +261,7 @@ async def get_prediction(pid: int, evaluate: bool = False):
                 pass
     with connect() as conn:
         row = conn.execute("SELECT actual_price, evaluated_at, source, analyst_model, judge_model FROM predictions"
-                           " WHERE id = ?", (pid,)).fetchone()
+                           " WHERE id = ?", (pid,)).fetchone()  # any-world: after the Arena load above
     if not p.models and row["analyst_model"]:  # saved before R1: models backfilled from llm_usage
         p.models = {"analyst": row["analyst_model"], "judge": row["judge_model"] or row["analyst_model"]}
     return {"prediction": json.loads(p.model_dump_json()), "actual_price": row["actual_price"],
@@ -335,8 +340,8 @@ async def get_duel(duel_id: str):
                 status[i] = "done" if run.prediction else ("failed" if run.done else "running")
     if not meta or (not meta["mock"] and not all(preds)):
         with connect() as conn:
-            rows = conn.execute("SELECT prediction_json FROM predictions WHERE duel_id = ? ORDER BY id",
-                                (duel_id,)).fetchall()
+            rows = conn.execute(f"SELECT prediction_json FROM predictions WHERE duel_id = ? AND {ARENA_ONLY}"
+                                " ORDER BY id", (duel_id,)).fetchall()
         stored = [json.loads(r[0]) for r in rows if r[0]]
         if meta:  # match by run_id so A stays A
             by_run = {p.get("run_id"): p for p in stored}

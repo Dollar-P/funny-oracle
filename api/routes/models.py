@@ -9,6 +9,7 @@ import config
 from core import cache, cost
 from core.cost import BudgetGuard
 from core.db import connect
+from core.worlds import arena_only
 
 router = APIRouter()
 
@@ -42,7 +43,7 @@ def observed_latency() -> dict[str, dict]:
     """avg elapsed_s per (analyst_model, mode) from stored predictions (older rows: model from llm_usage)."""
     with connect() as conn:
         rows = conn.execute("SELECT p.id, p.mode, p.analyst_model, p.prediction_json FROM predictions p"
-                            " WHERE p.prediction_json IS NOT NULL").fetchall()
+                            f" WHERE p.prediction_json IS NOT NULL AND {arena_only('p')}").fetchall()
         usage = conn.execute("SELECT prediction_id, model, COUNT(*) n FROM llm_usage WHERE prediction_id IS NOT NULL"
                              " GROUP BY prediction_id, model").fetchall()
     top: dict[int, tuple[str, int]] = {}

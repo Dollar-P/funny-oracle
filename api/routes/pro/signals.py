@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Query
 from api import pro_state
 from api.routes.pro.common import bad, experiment, now, one, rows, signal_row
 from core import cost, scoreboard, snapshots
+from core.worlds import PRO
 
 router = APIRouter()
 STATUSES = ("flat", "rejected", "new", "approved", "filled", "closed", "cancelled", "expired")
@@ -35,7 +36,7 @@ def signal_detail(sid: int):
     if not r:
         bad(404, "unknown signal")
     sig = signal_row(r)
-    pred = scoreboard.load(r["prediction_id"]) if r["prediction_id"] else None
+    pred = scoreboard.load(r["prediction_id"], PRO) if r["prediction_id"] else None
     pos = one("SELECT * FROM positions WHERE signal_id = ? ORDER BY id DESC LIMIT 1", (sid,))
     fills = rows("SELECT * FROM fills WHERE position_id = ? ORDER BY id", (pos["id"],)) if pos else []
     if pos:
@@ -45,7 +46,6 @@ def signal_detail(sid: int):
         "signal": sig,
         "risk_events": rows("SELECT ts, rule, detail FROM risk_events WHERE signal_id = ? ORDER BY id", (sid,)),
         "position": pos, "fills": fills,
-        "replay_url": f"/p/{r['prediction_id']}" if r["prediction_id"] else None,
     }
     if pred:
         v = pred.verdict

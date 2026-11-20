@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from core.schemas import AgentReport, Catalyst, Forecast, KeyLevels, Prediction, ScenarioProbs, Verdict
+from core.worlds import PRO_ONLY
 from trading import calendar as cal
 
 UTC = timezone.utc
@@ -173,14 +174,15 @@ def evaluate_from_bars(bars: DemoBars, now: datetime) -> int:
 
     n = 0
     with connect() as conn:
-        rows = conn.execute("SELECT id, ticker, target_time FROM predictions WHERE actual_price IS NULL AND target_time <= ?",
-                            (now.isoformat(),)).fetchall()
+        rows = conn.execute(f"SELECT id, ticker, target_time FROM predictions WHERE actual_price IS NULL AND {PRO_ONLY}"
+                            " AND target_time <= ?", (now.isoformat(),)).fetchall()
         for r in rows:
             df = bars.data.get(r["ticker"], (None, None))[1]
             if df is None:
                 continue
             past = df[df.index <= pd.Timestamp(r["target_time"])]
             if len(past):
+                # any-world: by id, rows selected with PRO_ONLY above
                 conn.execute("UPDATE predictions SET actual_price = ?, evaluated_at = ? WHERE id = ?",
                              (float(past["Close"].iloc[-1]), now.isoformat(timespec="seconds"), r["id"]))
                 n += 1

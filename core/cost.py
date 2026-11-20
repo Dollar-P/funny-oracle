@@ -20,6 +20,7 @@ from datetime import date, datetime, timezone
 
 import config
 from core.db import connect
+from core.worlds import arena_only, only
 
 log = logging.getLogger(__name__)
 
@@ -172,7 +173,8 @@ def spend_summary() -> dict:
             "SELECT model, COUNT(*) n, SUM(input_tokens) i, SUM(output_tokens) o, SUM(thinking_tokens) t,"
             " SUM(search_calls) s, SUM(cost_usd) c FROM llm_usage GROUP BY model"
         ).fetchall()
-        n_pred = conn.execute("SELECT mode, COUNT(*), AVG(cost_usd) FROM predictions GROUP BY mode").fetchall()
+        n_pred = conn.execute(f"SELECT mode, COUNT(*), AVG(cost_usd) FROM predictions WHERE {arena_only()}"
+                              " GROUP BY mode").fetchall()
     spent = sum(r["c"] or 0 for r in rows)
     actual = total_actual_usd()
     month_searches = searches_this_month()
@@ -200,14 +202,16 @@ class BudgetGuard:
     def budget_usd(self) -> float:
         return self.budget_thb / config.USD_THB
 
-    def estimate_usd(self, mode: str, model: str | None = None) -> float:
+    def estimate_usd(self, mode: str, model: str | None = None, world: str = "arena") -> float:
         """Observed average of the last 10 predictions × 1.25, else a default.
 
         With `model`: history of that analyst model only; without history, the mode default
         scaled by the model's token price relative to REFERENCE_PRICE_MODEL (never below 1×).
         Without `model`: history of the mode across all models (legacy behaviour).
+        `world`: whose history ('arena' or 'pro'; Pro runs use v2 prompts and cost differently).
         """
-        q = ("SELECT AVG(cost_usd), COUNT(*) FROM (SELECT cost_usd FROM predictions WHERE mode = ? AND cost_usd > 0"
+        q = (f"SELECT AVG(cost_usd), COUNT(*) FROM (SELECT cost_usd FROM predictions WHERE {only(world)}"
+             " AND mode = ? AND cost_usd > 0"
              + (" AND analyst_model = ?" if model else "") + " ORDER BY id DESC LIMIT 10)")
         with connect() as conn:
             row = conn.execute(q, (mode, model) if model else (mode,)).fetchone()

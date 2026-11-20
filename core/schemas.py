@@ -1,9 +1,25 @@
 """Pydantic schemas shared across agents, orchestrator, UI and scoreboard."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
+
+
+class _HidesProDefaults(BaseModel):
+    """Pro (v2) fields still at their default are left out of dumps, so Arena JSON (stored prediction_json, API
+    responses, run events) stays byte-identical to main. Loading fills the defaults back in (round-trip safe)."""
+
+    _pro_defaults: ClassVar[dict[str, Any]] = {}
+
+    @model_serializer(mode="wrap")
+    def _drop_pro_defaults(self, handler):
+        d = handler(self)
+        if isinstance(d, dict):
+            for k, default in self._pro_defaults.items():
+                if k in d and d[k] == default:
+                    del d[k]
+        return d
 
 
 class ToolCall(BaseModel):
@@ -58,7 +74,8 @@ class AgentOutputPro(AgentOutput):
     invalidation: str = Field(description="one sentence: the observable fact that would prove this view wrong")
 
 
-class AgentReport(AgentOutput):
+class AgentReport(AgentOutput, _HidesProDefaults):
+    _pro_defaults: ClassVar[dict[str, Any]] = {"scenario_probs": None, "key_levels": None, "invalidation": None}
     agent: str
     # Pro (v2) fields — optional, the Arena never sets them
     scenario_probs: ScenarioProbs | None = None
@@ -105,8 +122,11 @@ class VerdictOutput(BaseModel):
     key_risks: list[str] = Field(description="2-4 key risks")
 
 
-class Verdict(VerdictOutput):
+class Verdict(VerdictOutput, _HidesProDefaults):
     """Stored verdict. Pro (v2) fields are optional; the Arena never sets them."""
+
+    _pro_defaults: ClassVar[dict[str, Any]] = {"thesis": None, "invalidation": None, "catalysts": [],
+                                               "no_trade_reason": None}
 
     thesis: str | None = None
     invalidation: str | None = None
@@ -179,7 +199,9 @@ class Forecast(BaseModel):
     fan: dict[str, list[float]] = Field(default_factory=dict)  # p10/p50/p90 per step
 
 
-class Prediction(BaseModel):
+class Prediction(_HidesProDefaults):
+    _pro_defaults: ClassVar[dict[str, Any]] = {"prompt_version": "v1", "temperature": None, "experiment_id": None,
+                                               "degraded": [], "as_of": None}
     id: int | None = None
     created_at: str
     ticker: str

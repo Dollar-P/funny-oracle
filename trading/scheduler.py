@@ -30,6 +30,7 @@ import config
 from core import cost
 from core.db import connect
 from core.schemas import Prediction
+from core.worlds import PRO, PRO_ONLY
 from trading import calendar as cal
 
 log = logging.getLogger("scheduler")
@@ -155,8 +156,8 @@ def _swing_slots(t: str, a: str, h: str, now: datetime, sch: dict):
 def estimate_s(model: str, think_preset: str | None) -> float:
     """Recent average duration of runs on this model (last 10 predictions), else a default."""
     with connect() as conn:
-        rows = conn.execute("SELECT prediction_json FROM predictions WHERE analyst_model = ? ORDER BY id DESC LIMIT 25",
-                            (model,)).fetchall()
+        rows = conn.execute(f"SELECT prediction_json FROM predictions WHERE analyst_model = ? AND {PRO_ONLY}"
+                            " ORDER BY id DESC LIMIT 25", (model,)).fetchall()
     vals = []
     for (pj,) in rows:
         try:
@@ -174,15 +175,20 @@ def estimate_s(model: str, think_preset: str | None) -> float:
     return DEFAULT_EST_S.get(config.provider_for(model), 60.0)
 
 
+def pro_spent_thb(since: datetime | None = None) -> float:
+    """Pro (scheduled runs + reviewer) spend, tracked basis; since=None → all time. Arena spend is never included."""
+    t0 = since.astimezone(UTC).isoformat(timespec="seconds") if since else ""
+    with connect() as conn:
+        v = conn.execute(f"SELECT COALESCE(SUM(cost_usd), 0) FROM predictions WHERE {PRO_ONLY} AND created_at >= ?",
+                         (t0,)).fetchone()[0]
+        r = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE agent = 'reviewer' AND created_at >= ?",
+                         (t0,)).fetchone()[0]
+    return cost.usd_to_thb(float(v) + float(r))
+
+
 def spent_today_thb(now: datetime) -> float:
     """Pro (scheduled + reviewer) spend since 00:00 UTC, tracked basis."""
-    day0 = datetime.combine(now.astimezone(UTC).date(), time(0), tzinfo=UTC).isoformat(timespec="seconds")
-    with connect() as conn:
-        v = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM predictions WHERE source = 'pro' AND created_at >= ?",
-                         (day0,)).fetchone()[0]
-        r = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE agent = 'reviewer' AND created_at >= ?",
-                         (day0,)).fetchone()[0]
-    return cost.usd_to_thb(float(v) + float(r))
+    return pro_spent_thb(datetime.combine(now.astimezone(UTC).date(), time(0), tzinfo=UTC))
 
 
 def est_cost_thb(mode: str, model: str) -> float:
@@ -190,7 +196,7 @@ def est_cost_thb(mode: str, model: str) -> float:
         return 0.0
     from core.cost import BudgetGuard
 
-    return cost.usd_to_thb(BudgetGuard().estimate_usd(mode, model))
+    return cost.usd_to_thb(BudgetGuard().estimate_usd(mode, model, world=PRO))
 
 
 def route(job: Job, s: dict, now: datetime, *, local_ok: bool, queue_eta_s: float, spent_thb: float) -> Job | Skip:
@@ -412,7 +418,7 @@ async def orchestrator_runner(job: Job, experiment_id: int, s: dict) -> Predicti
         pass
     if run.error or run.prediction_id is None:
         raise RuntimeError(run.error or "run finished without a prediction")
-    pred = scoreboard.load(run.prediction_id)
+    pred = scoreboard.load(run.prediction_id, PRO)
     if pred is None:
         raise RuntimeError(f"prediction {run.prediction_id} not found")
     return pred

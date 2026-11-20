@@ -65,7 +65,6 @@ export interface SignalDetail {
   risk_events: { ts: string; rule: string; detail: string }[];
   position: Record<string, unknown> & { review?: { post_mortem: string; thesis_held: boolean | null; lesson: string } | null } | null;
   fills: { id: number; reason: string; side: string; ts: string; price: number; qty: number; fee: number }[];
-  replay_url: string | null;
   prediction?: {
     id: number;
     created_at: string;
@@ -162,6 +161,9 @@ export interface Overview {
   breaker_events: { rule: string; ts: string; detail: string }[];
   spent_today_thb: number;
   daily_budget_thb: number;
+  pro_spent_total_thb: number;
+  combined_spent_thb: number;
+  combined_budget_thb: number;
   approval: "manual" | "auto";
   signal_counts: Record<string, number>;
   scheduler: { running: boolean; last_tick: string | null };

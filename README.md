@@ -233,26 +233,61 @@ How it works, in one line per stage:
   band coverage, calibration, ablations; "insufficient data" below 30 samples; LLM backtests only after a
   model's knowledge cutoff (`config.MODEL_CUTOFFS`).
 
-Run it:
+**Arena and Desk are separate worlds.** Both store predictions in the same table; Desk predictions have
+`source = 'pro'`. The Arena (Hall of Fame, history, replays, mock shows, duels, model stats, cost estimates,
+Streamlit, CLI) never shows them, and the Desk reads only them (`core/worlds.py`; a test fails if a new query
+forgets the filter). Money: the real budget cap (`BUDGET_THB`) is one combined figure for Arena + Pro, so the
+Arena's coin meter includes Pro spend. The Desk Overview shows Pro spend separately, and Arena stats never
+count it.
+
+### Try the Desk in demo mode (Windows PowerShell, no network, no LLM, no money)
+
+The demo dataset is in `data\pro_demo\` (synthetic prices, rule-based "agents", 75 simulated days). If it is
+missing, build it first with `.\.venv\Scripts\python.exe scripts\pro_demo.py` (about 5 minutes).
 
 ```powershell
-uvicorn api.main:app --port 8000                     # serves web/dist; open http://localhost:8000/pro
-# Settings page: watchlist, models, approval mode (manual by default), budgets, risk/cost parameters.
-# Overview → Start (or POST /api/pro/scheduler/start). One pass now: POST /api/pro/scheduler/tick
-# Lab → Run evaluation (or POST /api/pro/evaluation/run); reports also go to the `reports` table.
+cd D:\funny-price-prediction-project
+$env:PRO_DEMO_DIR = "data\pro_demo"
+$env:ORACLE_DB    = "data\pro_demo\pro_demo.db"
+$env:MOCK_LLM     = "true"
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --port 8011
 ```
 
-Local model: set `LOCAL_BASE_URL` in `.env` to your LM Studio server (e.g. `http://<lm-studio-host>:1234/v1`) and
-keep the API running through the local window. Optional `.env`: `PRO_LOCAL_WINDOW`, `PRO_TZ`,
-`PRO_STARTING_EQUITY`, `ALLOW_CRYPTO_SHORT`, `MODEL_CUTOFFS` (JSON).
+Open **http://127.0.0.1:8011/pro** (the web build in `web\dist` is served by the API; run `npm run build` in
+`web\` if it is missing). The clock is frozen at the demo's "now" (Fri 2026-11-20 23:50 UTC) and two signals are
+waiting for approval. Approving or rejecting writes to the demo DB; rebuild it with `scripts\pro_demo.py` to
+start over. Stop with Ctrl+C. The `$env:` variables stay set in that PowerShell window, so use a new window
+for real mode (or run `Remove-Item Env:PRO_DEMO_DIR, Env:ORACLE_DB, Env:MOCK_LLM`).
 
-No network, no key? A deterministic demo (synthetic prices, rule-based "agents", 75 simulated days):
+### Real mode (paper account on real prices, local model overnight)
+
+`LOCAL_BASE_URL` in `.env` points at LM Studio; load `prism-ml/bonsai-27b` there. In a **new** PowerShell
+window:
 
 ```powershell
-python scripts\pro_demo.py
-$env:PRO_DEMO_DIR="data/pro_demo"; $env:ORACLE_DB="data/pro_demo/pro_demo.db"; $env:MOCK_LLM="true"
-uvicorn api.main:app --port 8011                     # http://localhost:8011/pro
+cd D:\funny-price-prediction-project
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --port 8000      # real DB data\oracle.db, MOCK_LLM=false from .env
 ```
+
+In a second PowerShell window, check the local model and start the scheduler **before 23:00** (the local
+window is 23:00–07:00, Asia/Bangkok):
+
+```powershell
+(Invoke-RestMethod http://127.0.0.1:8000/api/models).models | Where-Object id -like "local:*" | Select-Object id, available, unavailable_reason
+# expect: local:prism-ml/bonsai-27b  True
+Invoke-RestMethod http://127.0.0.1:8000/api/pro/scheduler/status     # local_available should be True
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/pro/scheduler/start
+```
+
+Or open **http://127.0.0.1:8000/pro**, check Settings (watchlist, approval = manual, budgets, `local_tz`), and
+press **Overview → Start**. Keep the API window open overnight; the scheduler lives inside it. Stock jobs run
+after the NYSE close, gold and crypto later; inside the window each job runs on the local model (≈ 6–7 min,
+one at a time). Outside the window, or if LM Studio is unreachable, a job falls back to Gemini Flash-Lite
+within the daily Pro budget (default ฿10), and the reason is logged. Next morning: Overview → Recent
+scheduler jobs, approve/reject in Signals, then Lab → Run evaluation. One pass now instead of waiting: `POST /api/pro/scheduler/tick`.
+
+Optional `.env`: `PRO_LOCAL_WINDOW`, `PRO_TZ`, `PRO_STARTING_EQUITY`, `ALLOW_CRYPTO_SHORT`, `MODEL_CUTOFFS`
+(JSON).
 
 Expect the honest result: the LLM system will most likely not beat simple baselines after costs, and swing
 evidence takes months to accumulate (about 12 non-overlapping 1-month samples per asset per year). The Lab is

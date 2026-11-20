@@ -62,7 +62,8 @@ def test_mocked_scheduler_day_end_to_end(pro):
     sid = sigs["signals"][0]["id"]
     d = c.get(f"/api/pro/signals/{sid}").json()
     assert d["signal"]["direction"] == "long" and d["signal"]["size"]["qty"] > 0 and d["signal"]["p_win"] == 0.7
-    assert d["prediction"]["forecast"]["p90"] > d["prediction"]["forecast"]["p10"] and d["replay_url"]
+    assert d["prediction"]["forecast"]["p90"] > d["prediction"]["forecast"]["p10"]
+    assert "replay_url" not in d                                          # Pro predictions are not Arena replays
     assert d["signal"]["entry_deadline"].startswith("2026-03-04T14:30")
     assert c.post(f"/api/pro/signals/{sid}/approve").json()["signal"]["status"] == "approved"
     assert c.post(f"/api/pro/signals/{sid}/approve").status_code == 409

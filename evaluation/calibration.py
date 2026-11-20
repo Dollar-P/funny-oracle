@@ -165,9 +165,10 @@ def evaluated_rows(mode: str, asset_type: str, before: datetime | None = None,
                    prompt_version: str | None = None) -> list[dict]:
     """Evaluated Pro predictions in a bucket (outcome known before `before`)."""
     from core.db import connect
+    from core.worlds import PRO_ONLY
 
     q = ("SELECT created_at, target_time, prob_up, price_now, actual_price FROM predictions WHERE mode = ? AND"
-         " asset_type = ? AND actual_price IS NOT NULL AND source = 'pro'")
+         f" asset_type = ? AND actual_price IS NOT NULL AND {PRO_ONLY}")
     a: list = [mode, asset_type]
     if prompt_version:
         q += " AND prompt_version = ?"

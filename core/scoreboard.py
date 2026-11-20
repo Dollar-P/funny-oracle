@@ -11,6 +11,7 @@ import config
 from core import cost
 from core.db import connect
 from core.schemas import Prediction
+from core.worlds import ARENA_ONLY, arena_only, only
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ def save(pred: Prediction, run_id: str, source: str = "manual") -> int:
         )
         pid = int(cur.lastrowid)
         pred.id = pid
+        # any-world: writes the row just inserted
         conn.execute("UPDATE predictions SET prediction_json = ?, analyst_model = ?, judge_model = ?, duel_id = ?,"
                      " cost_actual_usd = ?, prompt_version = ?, experiment_id = ? WHERE id = ?",
                      (pred.model_dump_json(), pred.models.get("analyst"), pred.models.get("judge"), pred.duel_id,
@@ -48,9 +50,13 @@ def save(pred: Prediction, run_id: str, source: str = "manual") -> int:
     return pid
 
 
-def load(pid: int) -> Prediction | None:
+def load(pid: int, world: str | None = None) -> Prediction | None:
+    """world='arena' / 'pro': None unless the row belongs to that world; None = any (internal callers)."""
+    q = "SELECT prediction_json, actual_price FROM predictions WHERE id = ?"  # any-world: filtered below if asked
+    if world:
+        q += f" AND {only(world)}"
     with connect() as conn:
-        row = conn.execute("SELECT prediction_json, actual_price FROM predictions WHERE id = ?", (pid,)).fetchone()
+        row = conn.execute(q, (pid,)).fetchone()
     return Prediction.model_validate_json(row[0]) if row and row[0] else None
 
 
@@ -59,7 +65,7 @@ def recent(limit: int = 50) -> pd.DataFrame:
         return pd.read_sql_query(
             "SELECT id, created_at, ticker, mode, horizon, target_time, price_now, p10, p50, p90, prob_up,"
             " s_final, confidence, headline, cost_usd, source, actual_price, evaluated_at"
-            " FROM predictions ORDER BY id DESC LIMIT ?", conn, params=(limit,))
+            f" FROM predictions WHERE {ARENA_ONLY} ORDER BY id DESC LIMIT ?", conn, params=(limit,))
 
 
 # --- evaluation ------------------------------------------------------------------
@@ -109,7 +115,7 @@ def evaluate_due(max_items: int = 50) -> int:
     now = utcnow()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, ticker, mode, horizon, target_time FROM predictions"
+            "SELECT id, ticker, mode, horizon, target_time FROM predictions"  # any-world: fills outcomes for both
             " WHERE actual_price IS NULL AND target_time <= ? ORDER BY target_time LIMIT ?",
             (now.isoformat(), max_items),
         ).fetchall()
@@ -123,14 +129,14 @@ def evaluate_due(max_items: int = 50) -> int:
         if px is None:
             continue
         with connect() as conn:
-            conn.execute("UPDATE predictions SET actual_price = ?, evaluated_at = ? WHERE id = ?",
+            conn.execute("UPDATE predictions SET actual_price = ?, evaluated_at = ? WHERE id = ?",  # any-world: by id
                          (px, now.isoformat(timespec="seconds"), r["id"]))
         n += 1
     return n
 
 
 def metrics(mode: str | None = None) -> dict:
-    q = "SELECT * FROM predictions WHERE actual_price IS NOT NULL"
+    q = f"SELECT * FROM predictions WHERE actual_price IS NOT NULL AND {ARENA_ONLY}"
     params: tuple = ()
     if mode:
         q += " AND mode = ?"
@@ -140,9 +146,10 @@ def metrics(mode: str | None = None) -> dict:
         ag = pd.read_sql_query(
             "SELECT a.agent, a.score, p.price_now, p.actual_price FROM agent_outputs a"
             " JOIN predictions p ON p.id = a.prediction_id"
-            " WHERE p.actual_price IS NOT NULL AND a.error IS NULL AND a.score != 0"
+            f" WHERE p.actual_price IS NOT NULL AND a.error IS NULL AND a.score != 0 AND {arena_only('p')}"
             + (" AND p.mode = ?" if mode else ""), conn, params=params)
-        pending = conn.execute("SELECT COUNT(*) FROM predictions WHERE actual_price IS NULL").fetchone()[0]
+        pending = conn.execute(f"SELECT COUNT(*) FROM predictions WHERE actual_price IS NULL AND {ARENA_ONLY}"
+                               ).fetchone()[0]
     out: dict = {"n": len(df), "pending": int(pending)}
     if df.empty:
         return out

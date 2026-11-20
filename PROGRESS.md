@@ -6,11 +6,15 @@
 - **Pro — "The Desk"** (PRO.md) is implemented on branch `pro` (not merged): Signal Engine, Risk Engine, paper
   broker + Decimal ledger, scheduler with model routing and budgets, LLM backtests with contamination rules,
   calibration, Evaluation Lab + reports, `/api/pro/*` + SSE, and the Desk UI at `/pro` with an Arena ↔ Desk switch.
-- **Tests:** `pytest -q` → **352 passed** (214 existing + 138 Pro); `web/e2e/pro.mjs` 35/35 on the demo dataset,
-  `web/e2e/mobile.mjs` (Arena) 4/4; `npm run build` OK.
+- **Arena and Pro are separate worlds** (merge prep, `core/worlds.py`): Arena views never show `source = 'pro'`
+  predictions, Pro views read only them; Arena JSON is byte-identical to `main` on the real DB.
+- **Tests:** `pytest -q` → **359 passed** (214 existing + 145 Pro); `web/e2e/pro.mjs` 35/35 on the demo dataset;
+  Arena `mobile.mjs` 4/4, `show.mjs`, `replay.mjs`, `r7.mjs` OK on a copy of the real DB; `npm run build` OK.
+- **Ready to merge** (not merged); run commands for demo and real mode are in the README "Pro mode" section.
 - **Spend:** ฿27.39 tracked / ฿17.23 estimated actual of ฿100 (Pro P10 used **6 paid runs, ฿5.23 tracked**).
-- **Blocked:** the real overnight scheduler batch on a **local** model (LM Studio was not reachable from this
-  machine; see "P10 — what remains"). Everything else in P10 is done.
+- **Still to do (yours):** the real overnight scheduler batch on the **local** model. LM Studio is now reachable
+  (`GET /api/models` 2026-11-20: `local:prism-ml/bonsai-27b` available); the scheduler has not been started. See
+  "P10 — what remains". Database backup before merge prep: `data/oracle.db.bak-20261120` (git-ignored).
 - `main` is on GitHub; `pro` is local only. The local branch `backup/pre-rewrite` must never be pushed.
 
 ## Docs
@@ -34,7 +38,8 @@
 | P7 | LLM backtest mode with leakage rules + calibration | ✅ | `tests/pro/test_p7_backtest_llm.py` (16): contamination labels (on the cutoff day = contaminated; unknown cutoff = contaminated); backtest **never runs** a pre-cutoff date by default and replays it as FLAT `contaminated`; with `allow_contaminated` the dates run, are labelled and `verdict_eligible = false`; unknown cutoff → nothing runs; paid model → `CostConfirmationRequired` with an estimate; decision dates match the engine's schedule; point-in-time executor: last bar = the last bar closed at `as_of` (EDT/EST aware), price history and indicators computed from truncated bars, fundamentals/news/sentiment/macro/web refused and not even listed; anonymised payloads; orchestrator `as_of` mode: search off, no News Researcher, created_at/target_time from `as_of`, prompts show the historical time, only price tools offered, scalp refused; ablation variants (team-no-debate, single-agent, leave-one-out); PAV textbook case; isotonic monotone and fixes an overconfident model; identity below n = 50; Platt fallback; walk-forward never uses an outcome unknown at prediction time (label-flip test); Desk bucket calibrator |
 | P8 | Pro API + SSE events | ✅ | `api/tests/test_pro_api.py` (8): settings GET/PUT (deep merge, validation, operational vs experiment keys), **a mocked scheduler day through the API** (simulated clock, `/scheduler/tick`): signal → detail (agents, forecast, deadline, replay link) → approve (409 on a second approve/reject, 404 unknown) → orders → entry + T1 with the stop at breakeven → T2 → journal with review, tags, CSV; the **event stream** is ordered by `seq`, typed (`job_started`, `job_done`, `signal_created`, `order_placed`, `order_filled` ×3, `position_closed`, `equity_tick`), resumable with `after`/`Last-Event-ID`, filterable, and real SSE framing; overview KPIs (Sharpe labelled insufficient data), equity + buy & hold and cash benchmarks, risk limits + correlation matrix of open positions + rejection log, account reset = new experiment (old signals expire), scheduler start/stop/status, evaluation report run (wait) and fetch, backtests (baselines; LLM backtest on a paid model → `needs_confirmation` with an estimate) with progress events and an SSE stream that ends on `backtest_done`; Arena routes untouched. Full suite 351 passed; `npm run build` OK |
 | P9 | Desk UI | ✅ | `web/e2e/pro.mjs` against the demo dataset (`scripts/pro_demo.py`, served from a copy of its DB with the production build): **35/35 checks, 0 console errors** — all 8 pages render at 1440 px and 390 px, no horizontal scroll at 390 px, Approve and Reject work from the blotter (the approved signal shows as a pending entry), the Lab shows confidence intervals, n, insufficient-data badges and contamination labels, the Arena ↔ Desk switch round-trips. `web/e2e/mobile.mjs` (Arena) still 4/4 at 390 px. Screenshots in `docs/pro/` were reviewed; fixes made from them: backtest warm-up excluded from equity (see Pro decisions), straight P10/P50/P90 lines when a prediction has no fan path, 120-bar trade chart, thousands separators on price axes, calibration-plot label overlap, Lab tables in scroll containers, the Arena top bar's switch collapsing to an icon on phones, 100-row blotter. `npm run build` OK |
-| P10 | Real verification + docs | ⚠️ partial | **Paid:** 6 real runs (≤ 10) through the real API server and `/api/pro/scheduler/tick` on the real DB — table below. **Report:** `docs/pro/reports/2026-11-20-report-1.{md,json}`. **Docs:** README "Pro mode", this file, merge plan below. **Not done:** the overnight batch on local Quick (LM Studio unreachable) — instructions below |
+| P10 | Real verification + docs | ⚠️ partial (overnight batch is yours) | **Paid:** 6 real runs (≤ 10) through the real API server and `/api/pro/scheduler/tick` on the real DB — table below. **Report:** `docs/pro/reports/2026-11-20-report-1.{md,json}`. **Docs:** README "Pro mode", this file, merge plan below. **Not done:** the overnight batch on local Quick (LM Studio unreachable) — instructions below |
+| Merge prep | Arena/Pro separation, main merged, full verification, run docs | ✅ | `api/tests/test_worlds.py` (7): mixed DB → every Arena endpoint/helper identical before and after adding Pro rows and free of them, Pro ids 404 in the Arena; Pro views identical before and after adding Arena rows and never render an Arena prediction; filtered = unfiltered queries without Pro rows (NULL source = Arena); Arena JSON has no Pro keys and both worlds round-trip; guard over every `predictions` query. `main` worktree vs this branch on copies of the real DB: identical Arena JSON (md5). pytest 359 passed; `npm run build` OK; Arena e2e mobile 4/4, show, replay, r7 OK (0 errors); Desk `pro.mjs` 35/35; demo and real-mode commands run in PowerShell |
 
 ## P10 — real verification (2026-11-20, 10:00–10:05 Bangkok)
 
@@ -76,11 +81,13 @@ it ranks at the 57th percentile of 1,000 random strategies (Sharpe 5/50/95th pct
 strategies are barely invested next to a +96 % buy & hold in mega-cap tech. 5 variants compared → Bonferroni α/k
 = 0.01.
 
-### P10 — what remains (blocked) and how to run it
+### P10 — what remains and how to run it
 
-1. Put the LM Studio address in `.env`: `LOCAL_BASE_URL=http://<lm-studio-host>:1234/v1` (never commit it), load
-   `prism-ml/bonsai-27b`, and check `GET /api/models` shows it as available.
-2. Start the API in the evening: `uvicorn api.main:app --port 8000`. In Settings, set the 14-asset default
+Exact PowerShell commands: README → "Pro mode" → "Real mode".
+
+1. `LOCAL_BASE_URL` is set in `.env` and LM Studio answered on 2026-11-20 (`local:prism-ml/bonsai-27b`
+   available). Check `GET /api/models` again before starting.
+2. Start the API in the evening: `.\.venv\Scripts\python.exe -m uvicorn api.main:app --port 8000`. In Settings, set the 14-asset default
    watchlist (or keep the 6 stocks), approval mode, and `local_tz` (`Asia/Bangkok`).
 3. Start the scheduler before 23:00 (Overview → Start, or `POST /api/pro/scheduler/start`). Inside the window
    (23:00–07:00) stock jobs (after the 04:00 Bangkok close + 30 min), gold and crypto jobs run on local Quick,
@@ -91,27 +98,35 @@ strategies are barely invested next to a +96 % buy & hold in mega-cap tech. 5 va
 
 ## Check manually (Pro)
 
-1. **The local overnight batch** above (blocked during development).
+1. **The local overnight batch** above (not run during development).
 2. **A real trade lifecycle**: approve a real signal and follow it to a fill, T1/T2/stop and the Reviewer
    post-mortem over the following days (only simulated so far).
 3. **Real 1m intrabar resolution**: `minute_resolver` is unit-tested with fake bars; the forward loop does not
    pass a resolver yet, so ambiguous bars are always resolved as "stop".
 4. **The Desk in a real browser**: live row highlights via SSE and the CSV download (headless can't check the file).
 5. **Real data in `data/oracle.db`**: P10 added Pro tables, settings, 6 Pro predictions (source `pro`) and 6 FLAT
-   signals. They are additive; the Pro predictions also show up in the Arena's Hall of Fame.
+   signals. They are additive and, since merge prep, hidden from every Arena view (Hall of Fame shows #1–20).
+6. **Arena on a phone**: the coin meter now shows only the amount spent below 640 px (the cap is in its tooltip),
+   and the nav icons are 4 px tighter, so the bar fits one line with the Desk icon (it wrapped to 3 lines).
 
 ## Merge plan (`pro` → `main`) — not merged
 
-1. Rebase/merge `main` into `pro` first (no conflicts expected: `main` has not moved since `pro` branched).
+Status 2026-11-20 (merge prep): steps 1 and 3 are done and green; Pro is separated from the Arena; the Hall of
+Fame decision is made (Pro hidden). What is left is step 4, when you decide.
+
+1. Rebase/merge `main` into `pro` first. Done: `git merge main` → already up to date (`main` = `origin/main` =
+   `df82d0c`, the branch point). Repeat right before merging if `main` moves.
 2. Shared-code changes are additive and default to the Arena's behaviour: `agents/prompts/` moved to `v1/`
    (byte-identical, pinned by test), optional fields on `AgentReport`/`Verdict`/`Prediction`, `VerdictOutput` (same
    JSON schema as before, pinned), `run_prediction(prompt_version, temperature, experiment_id, as_of)` with
    Arena defaults, `LLM(temperature)`, additive DB migration + new tables, `RunManager.start_real` passing Pro
    params only when present, `mcp_server.server.price_history_payload` (extracted, same output), the Arena top
-   bar's mode switch, and the new `/pro` routes.
+   bar's mode switch, and the new `/pro` routes. Merge prep added `core/worlds.py` (Arena/Pro filters on every
+   `predictions` query), a serializer that leaves Pro fields at their defaults out of JSON (Arena JSON =
+   `main`), `BudgetGuard.estimate_usd(world=…)`, and Pro runs hidden from `GET /api/runs`.
 3. Before merging: run `pytest -q`, `npm run build`, `web/e2e/mobile.mjs`, `show.mjs`, `replay.mjs`, `r7.mjs`
-   (Arena) and `pro.mjs` (Desk demo); decide whether Pro predictions should be hidden from the Hall of Fame
-   (filter `source = 'pro'`); fill in `MODEL_CUTOFFS` if LLM backtests are wanted.
+   (Arena) and `pro.mjs` (Desk demo). All green on 2026-11-20 (see Current state). Optional: fill in
+   `MODEL_CUTOFFS` if LLM backtests are wanted.
 4. Merge with `--no-ff`, push `main` only, and keep `pro` for the forward test that continues to accumulate data.
 
 ## Pro decisions
@@ -257,12 +272,45 @@ strategies are barely invested next to a +96 % buy & hold in mega-cap tech. 5 va
   runs in demo mode with `PRO_DEMO_DIR` (synthetic bars, frozen clock, no network, no LLM). Output in
   `data/pro_demo/` (git-ignored).
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
+- **Arena / Pro separation** (merge prep, `core/worlds.py`): one table, two worlds by `source`. `ARENA_ONLY` =
+  `COALESCE(source, '') != 'pro'` (NULL and legacy sources are Arena), `PRO_ONLY` = `source = 'pro'`. Every
+  query on `predictions` carries one of them or a `# any-world: <reason>` marker (writers, by-id lookups behind
+  an explicit check, the migration, seed id collisions); `api/tests/test_worlds.py` fails otherwise. Audit:
+
+  | Reader | World | Changed? |
+  |---|---|---|
+  | `GET /api/scoreboard` (Hall of Fame: coin flip, band coverage, agent podium, model leaderboard, pending) — `scoreboard.metrics`, `model_leaderboard`, `pending` | Arena | yes |
+  | `GET /api/predictions` (history list, filters) | Arena | yes |
+  | `GET /api/predictions/{id}` and `POST …/replay` (Replay page `/p/:id`) | Arena; Pro ids → 404 | yes |
+  | Mock shows (`api/mock_runner.stored_ids` / `pick` / `load`), used by mock runs and mock duels | Arena | yes |
+  | `GET /api/duels/{id}` (stored duel fallback) | Arena | yes (Pro never has a `duel_id`) |
+  | `GET /api/models` latency (`observed_latency`) and cost estimates (`BudgetGuard.estimate_usd`) | Arena by default; Pro passes `world="pro"` | yes |
+  | `GET /api/runs` (active runs) | Arena; Pro scheduler runs still share the slots | yes |
+  | `cost.spend_summary()["predictions"]` (Streamlit "spend" panel) | Arena | yes |
+  | Streamlit `app.py` (recent, metrics, replay by id) and CLI `scripts/auto_scalp.py`, `scripts/ui_smoke.py` (via `scoreboard`) | Arena | yes (through `scoreboard`) |
+  | `core/seeds.export` | Arena | yes |
+  | `core/seeds.load` / `load_if_empty` (id collisions, "DB in use") | any | no (marked) |
+  | `scoreboard.evaluate_due` (fills actual prices) | any; both worlds need outcomes | no (marked) |
+  | `/api/budget`, `cost.total_spent_usd`, BudgetGuard cap (from `llm_usage`) | combined, by design | no |
+  | MCP tools (`mcp_server/`) | — | no (never read `predictions`) |
+  | Pro: signal detail, scheduler duration estimate and spend, report forward section, calibration buckets, demo evaluation | Pro | yes (`PRO_ONLY` / `load(id, "pro")`) |
+
+  The Desk's "Arena replay →" link was removed: Pro predictions are not Arena shows. Money: one combined
+  figure for the real budget cap (the Arena's coin meter and BudgetGuard). The Desk Overview shows Pro spend
+  today, Pro total and the shared cap separately (`pro_spent_total_thb`, `combined_spent_thb`). Arena stats
+  (average cost per model, estimates) never include Pro.
+- **Arena JSON identical to `main`** (merge prep): the Pro fields added in P1 (`prompt_version`, `temperature`,
+  `experiment_id`, `degraded`, `as_of`; verdict `thesis`/`invalidation`/`catalysts`/`no_trade_reason`; report
+  `scenario_probs`/`key_levels`/`invalidation`) are left out of dumps while at their defaults, so Arena
+  responses, stored `prediction_json` and run events are byte-identical to `main`, and loading restores the
+  defaults. Verified by running `main` (a git worktree) and this branch on copies of the real DB: `main`
+  without the Pro rows and this branch with them produce the same JSON (scoreboard, list, every detail,
+  budget, Streamlit helpers; md5 equal).
 
 ## Pro known issues
 
 - **No real fill yet**: the 6 real P10 predictions were all FLAT; trading behaviour is verified on simulations
   and the demo only.
-- **Pro predictions appear in the Arena's Hall of Fame** (same `predictions` table, `source = 'pro'`).
 - **Intrabar resolution** with 1m bars is implemented but not wired into the forward loop (ambiguous bars → stop).
 - **Demo dataset build is slow** (~5 min for 75 simulated days) because every tick re-reads bars; fine for a
   one-off build.
