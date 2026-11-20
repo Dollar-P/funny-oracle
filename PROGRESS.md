@@ -28,7 +28,7 @@
 | P4 | Paper Broker + Ledger + trading calendar | ✅ | `tests/pro/test_p4_broker.py` (23), synthetic bars with hand-computed fills: next-open entry (never the signal bar; a decision after Monday's close fills at Tuesday's 14:30 UTC open), entry gap past stop/T1 cancels, limit entry, expiry, gap through stop fills at the open (−751.85 / −1.50 R), T1 → breakeven → stop (+99.00), T2 cancels the stop (OCO), gap through targets, intrabar ambiguity = stop and 1m resolver (failure → stop), time exit, crypto fees/slippage to the cent (+384.60, costs 15.40), short mirror, MAE/MFE, 1-share T1, state round trip; ledger: equity = cash + Σ qty × mark every bar and `reconcile()` = 0.00 exactly, cash − start = Σ realised P&L; persistent account: restart never re-feeds a bar, order statuses (OCO cancelled), equity snapshot 100,204.00 reconciles with the fills; calendar: Thanksgiving, early close, DST, weekends, gold Sunday open, bar open/close times |
 | P5 | Baselines + quant backtester + metrics + stats | ✅ | `tests/pro/test_p5_metrics.py` (13): Sharpe √75/30, Sortino √300/30, vol, CAGR, max DD, Calmar, expectancy, profit factor, beta, IR, Brier, log loss, pinball, band coverage, reliability bins, Wilson 8/10 = (0.490, 0.943), block-bootstrap coverage ≥ 88 % on iid data, paired bootstrap, non-overlapping selection, percentile rank, Metric labels. `tests/pro/test_p5_backtest.py` (12): buy & hold by hand (119,936.04), cash, engine reconciles to 0.00 and final equity = start + Σ P&L, momentum/SMA/random (seeded), quant-only through the Signal Engine, analytic forecast = Monte Carlo (0.5 %), max-DD halt for good; **lookahead**: a next-bar oracle is ≈ 50 % on the real view and > 95 % on a deliberately leaky view; **speed**: buy & hold + momentum + 1,000 random runs over 3 years × 3 assets in ≈ 27 s (< 60 s) |
 | P6 | Scheduler + forward paper loop + model routing and budgets | ✅ | `tests/pro/test_p6_scheduler.py` (13): **mocked 3-day simulation** (Tue–Fri, 30-min simulated ticks, synthetic bars released only once complete, fake runner + reviewer): 9 jobs (incl. Monday's stock job caught up before Tuesday's open), signals → fills (entry/T1/T2) → closed trades with positive R and reviewer post-mortems, duplicate signals rejected by risk, stock entries at 14:30 UTC, ≥ 150 equity snapshots, cash reconciles with fills; **restart** with fresh objects and overlapping ticks → no job runs twice, no fill duplicated; **LM Studio down** → Gemini fallback logged; **won't finish in the window** → fallback, or skip when the money budget is 0; outside the window → wait if the job is still valid when it opens, else fall back; **Arena active** → job deferred, nothing claimed, runs on the next idle tick; manual approve → fill; approval after the entry bar opened → expired; scalp is Gemini-only; window across midnight in Asia/Bangkok; due times for stock/gold/crypto and weekends |
-| P7 | LLM backtest mode with leakage rules + calibration | | |
+| P7 | LLM backtest mode with leakage rules + calibration | ✅ | `tests/pro/test_p7_backtest_llm.py` (16): contamination labels (on the cutoff day = contaminated; unknown cutoff = contaminated); backtest **never runs** a pre-cutoff date by default and replays it as FLAT `contaminated`; with `allow_contaminated` the dates run, are labelled and `verdict_eligible = false`; unknown cutoff → nothing runs; paid model → `CostConfirmationRequired` with an estimate; decision dates match the engine's schedule; point-in-time executor: last bar = the last bar closed at `as_of` (EDT/EST aware), price history and indicators computed from truncated bars, fundamentals/news/sentiment/macro/web refused and not even listed; anonymised payloads; orchestrator `as_of` mode: search off, no News Researcher, created_at/target_time from `as_of`, prompts show the historical time, only price tools offered, scalp refused; ablation variants (team-no-debate, single-agent, leave-one-out); PAV textbook case; isotonic monotone and fixes an overconfident model; identity below n = 50; Platt fallback; walk-forward never uses an outcome unknown at prediction time (label-flip test); Desk bucket calibrator |
 | P8 | Pro API + SSE events | | |
 | P9 | Desk UI | | |
 | P10 | Real verification + docs | | |
@@ -129,9 +129,30 @@
   prices were computed for that bar). Daily-loss breaker: day start = last equity snapshot before 00:00 UTC.
 - **Reviewer** (P6, `agents/reviewer.py`): one call per closed trade (`positions.review`), local when reachable,
   else the cheapest Gemini model if the money budget allows; a failure is stored as "review unavailable".
+- **LLM backtests** (P7, `evaluation/llm_backtest.py`): decision dates on or before `MODEL_CUTOFFS[model]` (or
+  any date if the cutoff is unknown) are "contaminated — not evidence" and are **not run** unless
+  `allow_contaminated=True`, which also makes the result ineligible for a verdict. Runs go through
+  `run_prediction(as_of=…)` with `evaluation/pit_executor.py`: only `get_price_history` / `get_indicators`
+  (computed from bars closed at `as_of`) are offered; everything "as of now" is not listed and refused if
+  called; search and the News Researcher are off; σ and the price come from bars ≤ `as_of`. Predictions are not
+  saved to the `predictions` table (they would show up in the Arena's Hall of Fame). The trades go through the
+  normal backtest engine via a `PrecomputedStrategy`. Paid models raise `CostConfirmationRequired` until
+  confirmed; local is the default.
+- **Ablation** (P7, `evaluation/ablation.py`): team-no-debate, single-agent and leave-one-out variants are derived
+  from the stored full-system predictions (no extra LLM calls); every variant, including `full`, uses the
+  closed-form forecast so only the score differs.
+- **Calibration** (P7, `evaluation/calibration.py`): own PAV isotonic on ≤ 20 quantile bins (≥ 5 per bin, ties
+  kept together) — fitting raw 0/1 outcomes pinned the curve to 0.99 at the top edge; Platt fallback (fewer than 3
+  levels) with an L2 prior toward the identity map; active at n ≥ 50 per (mode, asset class) bucket of evaluated
+  Pro predictions; walk-forward uses only outcomes known before each prediction.
+- **Tool snapshots** (P7, `core/snapshots.py`): Pro live runs store every successful tool result (zlib JSON) in
+  `tool_snapshots`; the Arena does not.
 - **Line endings**: the repo mixes LF and CRLF files; edits keep each file's existing endings.
 
 ## Pro known issues
 
+- **Anonymised backtests are partial**: `PointInTimeExecutor(anonymize=True)` hides the ticker and dates in tool
+  payloads, but the prompts still name the ticker and the decision time, so it is not a full anonymised
+  experiment yet.
 - `MODEL_CUTOFFS` are unknown for every model, so LLM backtests can never produce a verdict until the cutoffs
   are filled in (by design — see Pro decisions).

@@ -87,8 +87,12 @@ class Strategy(Protocol):
 class BacktestConfig:
     start: str | None = None             # first decision date (bars before it are warm-up only)
     end: str | None = None
-    horizon_bars: int = 21
+    horizon_bars: int | dict = 21        # int, or {asset_type: bars} (e.g. 1M = 21 stock/gold, 30 crypto)
     decision_every: int | None = None    # default: horizon_bars (non-overlapping decisions per ticker)
+
+    def hb(self, asset_type: str) -> int:
+        h = self.horizon_bars
+        return int(h.get(asset_type, next(iter(h.values())))) if isinstance(h, dict) else int(h)
     starting_equity: float = 100_000.0
     risk: RiskParams = field(default_factory=RiskParams)
     signal: SignalParams = field(default_factory=SignalParams)
@@ -185,7 +189,6 @@ def run_backtest(strategy: Strategy, data: dict[str, tuple[str, pd.DataFrame]] |
                  cfg: BacktestConfig) -> BacktestResult:
     prep = data if data and isinstance(next(iter(data.values())), _Prepared) else prepare(data, cfg.signal.atr_period)
     tickers = list(prep)
-    every = cfg.decision_every or cfg.horizon_bars
     start = pd.Timestamp(cfg.start).date() if cfg.start else None
     end = pd.Timestamp(cfg.end).date() if cfg.end else None
     days = sorted({d for p in prep.values() for d in p.day_index if (end is None or d <= end)})
@@ -256,6 +259,7 @@ def run_backtest(strategy: Strategy, data: dict[str, tuple[str, pd.DataFrame]] |
             if i < cfg.warmup_bars:
                 continue
             first_decision.setdefault(t, i)
+            every = cfg.decision_every or cfg.hb(p.asset_type)
             if (i - first_decision[t]) % every != 0:
                 continue
             if any(True for _ in live[t]):
@@ -263,13 +267,13 @@ def run_backtest(strategy: Strategy, data: dict[str, tuple[str, pd.DataFrame]] |
             sig_w = p.logret[max(1, i - 251): i + 1]
             sig_w = sig_w[np.isfinite(sig_w)]
             sigma_d = float(sig_w.std(ddof=1)) if len(sig_w) > 10 else float("nan")
-            ctx = StrategyCtx(asset_type=p.asset_type, horizon_bars=cfg.horizon_bars, signal=cfg.signal, rng=rng,
+            ctx = StrategyCtx(asset_type=p.asset_type, horizon_bars=cfg.hb(p.asset_type), signal=cfg.signal, rng=rng,
                               sigma_daily=sigma_d, atr=float(p.atr[i]))
             view = PointInTimeView(p.df, p.close, i)
             dec = strategy.decide(t, view, ctx)
             rec = getattr(strategy, "last_prediction", None)
             if rec is not None:
-                preds.append({**rec, "ticker": t, "i": i, "ts": p.df.index[i], "target_i": i + cfg.horizon_bars})
+                preds.append({**rec, "ticker": t, "i": i, "ts": p.df.index[i], "target_i": i + cfg.hb(p.asset_type)})
                 strategy.last_prediction = None  # type: ignore[attr-defined]
             if dec is None:
                 reason = getattr(strategy, "last_flat", None) or "no_decision"
