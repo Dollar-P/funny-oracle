@@ -47,9 +47,33 @@ AGENT_TIMEOUT_S = float(_env("AGENT_TIMEOUT_S", "60"))
 MAX_AGENT_TURNS = 8
 
 
+# --- Local LLM: OpenAI-compatible server such as LM Studio (LOCAL_LLM.md) --------
+# The server address comes only from LOCAL_BASE_URL (env / .env) — never hard-code a host.
+LOCAL_BASE_URL = _env("LOCAL_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+LOCAL_MODEL = _env("LOCAL_MODEL", "prism-ml/bonsai-27b")       # LM Studio model id (without prefix)
+LOCAL_PREFIX = "local:"                                         # our model ids: local:<LM Studio id>
+LOCAL_CONCURRENCY = int(_env("LOCAL_CONCURRENCY", "1"))         # lesson 7: ~1.3× speed-up at best
+LOCAL_TIMEOUT_S = float(_env("LOCAL_TIMEOUT_S", "240"))         # lesson 8: per agent (and per request)
+LOCAL_MAX_TURNS = int(_env("LOCAL_MAX_TURNS", "4"))             # analyst tool turns
+LOCAL_THINK_PRESET = _env("LOCAL_THINK_PRESET", "quick").lower()  # quick = all off · deep = LOCAL_LLM.md policy
+LOCAL_MAX_TOKENS_THINK = int(_env("LOCAL_MAX_TOKENS_THINK", "4000"))  # lesson 5
+LOCAL_MAX_TOKENS_FAST = int(_env("LOCAL_MAX_TOKENS_FAST", "1000"))
+LOCAL_VALIDATION_RETRIES = int(_env("LOCAL_VALIDATION_RETRIES", "2"))  # lesson 2: retry with feedback
+THINK_PRESETS = ("quick", "deep")
+SCALP_PROVIDERS = ("gemini", "claude")                          # local is too slow for a 15 min horizon
+
+
+def local_model_id(model: str) -> str:
+    """'local:prism-ml/bonsai-27b' → 'prism-ml/bonsai-27b' (the id LM Studio expects)."""
+    return model[len(LOCAL_PREFIX):] if model.startswith(LOCAL_PREFIX) else model
+
+
 def models_for(mode: str, provider: str | None = None) -> dict[str, str]:
     """Model per role for a mode. Roles: analyst, judge."""
     p = provider or LLM_PROVIDER
+    if p == "local":
+        m = LOCAL_PREFIX + LOCAL_MODEL
+        return {"analyst": m, "judge": m}
     if p == "claude":
         if mode == "scalp":
             return {"analyst": CLAUDE_SCALP_MODEL, "judge": CLAUDE_SCALP_MODEL}
@@ -63,6 +87,8 @@ def provider_for(model: str | None, default: str | None = None) -> str:
     """Provider a model ID belongs to (claude-* → claude, else gemini)."""
     if not model:
         return default or LLM_PROVIDER
+    if model.startswith(LOCAL_PREFIX):
+        return "local"
     return "claude" if model.removeprefix("models/").startswith("claude") else "gemini"
 
 
@@ -92,6 +118,8 @@ PRICES: dict[str, list[dict]] = {
     "claude-haiku-5-5": [{"until": None, "in": 0.10, "out": 0.50, "search": CLAUDE_SEARCH_USD}],
     "claude-sonnet-5-5": [{"until": None, "in": 2.00, "out": 10.00, "search": CLAUDE_SEARCH_USD}],
     "claude-opus-5-5": [{"until": None, "in": 4.00, "out": 20.00, "search": CLAUDE_SEARCH_USD}],
+    # lesson 10: local models are free; usage is still logged from the server's `usage` block
+    "local:": [{"until": None, "in": 0.0, "out": 0.0, "search": 0.0}],
 }
 # Unknown model → charge like this (deliberately pessimistic) and log a warning.
 FALLBACK_PRICE = {"in": 4.00, "out": 20.00, "search": GEMINI_SEARCH_USD}

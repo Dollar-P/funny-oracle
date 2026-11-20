@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -27,7 +28,7 @@ import config
 from core import cache, cost
 from core.cost import BudgetGuard, Usage
 from core.events import NULL_SINK, EventSink
-from core.schemas import ToolCall
+from core.schemas import STRICT_SCHEMAS, ToolCall
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class AgentResult:
     error: str | None = None
     searched: bool = False
     elapsed_s: float = 0.0
+    reasoning: str = ""  # local reasoning models: the thinking text, kept apart from the answer
 
 
 # --- JSON helpers ----------------------------------------------------------------
@@ -218,17 +220,22 @@ def _schema_hint(schema: type[BaseModel]) -> str:
 
 class LLM:
     def __init__(self, provider: str | None = None, run_id: str | None = None,
-                 guard: BudgetGuard | None = None, client: Any = None):
+                 guard: BudgetGuard | None = None, client: Any = None, think_preset: str | None = None):
         self.provider = (provider or config.LLM_PROVIDER).lower()
         self.run_id = run_id
         self.guard = guard or BudgetGuard()
+        self.think_preset = (think_preset or config.LOCAL_THINK_PRESET).lower()  # local provider only
+        if self.think_preset not in config.THINK_PRESETS:
+            raise ValueError(f"think preset must be one of {config.THINK_PRESETS}")
         self.events: EventSink = NULL_SINK  # set per run by the orchestrator (REDESIGN §2.1)
         if self.provider == "gemini":
             self.backend: _Backend = GeminiBackend(self, client)
         elif self.provider == "claude":
             self.backend = ClaudeBackend(self, client)
+        elif self.provider == "local":
+            self.backend = OpenAICompatBackend(self, client)
         else:
-            raise ValueError(f"unknown LLM_PROVIDER {self.provider!r} (gemini|claude)")
+            raise ValueError(f"unknown LLM_PROVIDER {self.provider!r} (gemini|claude|local)")
 
     def _account(self, u: Usage, agent: str) -> float:
         return cost.record(u, agent, self.run_id)
@@ -616,3 +623,207 @@ class ClaudeBackend:
     async def probe(self, model: str, feature: str) -> tuple[bool, bool]:
         # Claude supports server web search together with client tools on current models.
         return True, False
+
+
+# --- OpenAI-compatible local server (LM Studio etc.) — LOCAL_LLM.md -----------------------------
+
+_THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.S)
+_LOCAL_SLOTS: threading.BoundedSemaphore | None = None
+_LOCAL_SLOTS_N = 0
+
+
+def _local_slots() -> threading.BoundedSemaphore:
+    """Process-wide limit (lesson 7): duel runs live in different threads / event loops but share one GPU."""
+    global _LOCAL_SLOTS, _LOCAL_SLOTS_N
+    if _LOCAL_SLOTS is None or _LOCAL_SLOTS_N != config.LOCAL_CONCURRENCY:
+        _LOCAL_SLOTS = threading.BoundedSemaphore(max(1, config.LOCAL_CONCURRENCY))
+        _LOCAL_SLOTS_N = config.LOCAL_CONCURRENCY
+    return _LOCAL_SLOTS
+
+
+def split_reasoning(msg: dict) -> tuple[str, str]:
+    """Lesson 4: (content, reasoning). Reasoning comes in `reasoning_content` (or `reasoning`); some
+    templates leak `<think>…</think>` into the content, which is stripped and kept as reasoning."""
+    content = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+    if not isinstance(reasoning, str):
+        reasoning = json.dumps(reasoning)
+    leaked = _THINK_RE.findall(content)
+    if leaked:
+        reasoning += "".join(t.removeprefix("<think>").removesuffix("</think>") for t in leaked)
+        content = _THINK_RE.sub("", content)
+    return content.strip(), reasoning.strip()
+
+
+def validation_problems(e: Exception | None) -> list[str]:
+    if isinstance(e, ValidationError):
+        out = []
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err.get("loc", ())) or "(root)"
+            out.append(f"{loc}: {err.get('msg')} (got {err.get('input')!r})"[:200])
+        return out
+    return [str(e)[:200]] if e else []
+
+
+LOCAL_RULES = (
+    "\n\nNumber rules: score is a decimal from -1.0 to 1.0 (e.g. 0.35), confidence a decimal from 0.0 to 1.0 "
+    "(e.g. 0.7). They are NOT percentages: never answer 72 or 72.5. Compare numbers carefully before saying one "
+    "is above or below another (e.g. 91,250 is ABOVE 84,100)."
+)
+FINAL_JSON_PROMPT = (
+    "Tool phase finished. Using ONLY the tool results above, reply now with the final JSON object matching the "
+    "schema. score/confidence are decimals, not percentages. No tool calls, no prose."
+)
+
+
+def feedback_prompt(bad: str, problems: list[str]) -> str:
+    return ("Your JSON was invalid:\n" + bad[:1500] + "\n\nProblems:\n" + "\n".join(f"- {p}" for p in problems)
+            + "\n\nReply again with ONLY the corrected JSON object. Keep every number that was valid.")
+
+
+class OpenAICompatBackend:
+    """Manual tool loop against an OpenAI-compatible `/chat/completions` endpoint (LM Studio).
+
+    Turn structure (lessons 4-6): tool-selection turns with tools and thinking off → one final turn without
+    tools and with `response_format: json_schema`. Thinking is per request: `reasoning_effort: "none"` turns
+    it off; omitting the field keeps the server default (LM Studio Thinking ON). Ranges are validated with the
+    strict Pydantic schemas and invalid output is sent back with a list of problems (lessons 1-2).
+    """
+
+    def __init__(self, llm: "LLM", client: Any = None):
+        self.llm = llm
+        self._client = client
+
+    @property
+    def client(self):
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(config.LOCAL_TIMEOUT_S, connect=10.0))
+        return self._client
+
+    def thinks(self, agent: str, final: bool) -> bool:
+        """LOCAL_LLM.md thinking policy. quick: never. deep: every final synthesis turn (analysts' AgentReport,
+        Bull / Bear, Judge); tool-selection turns stay fast."""
+        return self.llm.think_preset == "deep" and final
+
+    async def _chat(self, agent: str, model: str, messages: list[dict], *, think: bool, tools: list | None = None,
+                    schema: type[BaseModel] | None = None) -> tuple[dict, str]:
+        payload: dict[str, Any] = {
+            "model": config.local_model_id(model),
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": config.LOCAL_MAX_TOKENS_THINK if think else config.LOCAL_MAX_TOKENS_FAST,
+        }
+        if not think:
+            payload["reasoning_effort"] = "none"  # the only value that turns thinking off (LOCAL_LLM.md)
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        if schema is not None:
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": schema.__name__, "strict": True, "schema": strict_schema(schema)}}
+        slots = _local_slots()
+        await asyncio.to_thread(slots.acquire)
+        try:
+            r = await self.client.post(f"{config.LOCAL_BASE_URL}/chat/completions", json=payload,
+                                       timeout=config.LOCAL_TIMEOUT_S)
+        finally:
+            slots.release()
+        if r.status_code != 200:
+            raise RuntimeError(f"local LLM HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        u = data.get("usage") or {}
+        reasoning_tok = (u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+        usage = Usage(model, input_tokens=u.get("prompt_tokens") or 0,
+                      output_tokens=max(0, (u.get("completion_tokens") or 0) - reasoning_tok),
+                      thinking_tokens=reasoning_tok)
+        self.llm._account(usage, agent)  # price 0, but tokens are still logged (lesson 10)
+        choice = (data.get("choices") or [{}])[0]
+        return choice.get("message") or {}, choice.get("finish_reason") or ""
+
+    async def run(self, *, agent, system, user, schema, model, specs, executor, enable_search, max_turns,
+                  thinking) -> AgentResult:
+        strict = STRICT_SCHEMAS.get(schema, schema)
+        tools = [{"type": "function", "function": {"name": s.name, "description": s.description[:1000],
+                                                   "parameters": s.input_schema}} for s in specs]
+        allowed = {s.name for s in specs}
+        messages: list[dict] = [{"role": "system", "content": system + LOCAL_RULES},
+                                {"role": "user", "content": user}]
+        trace: list[ToolCall] = []
+        reasoning_parts: list[str] = []
+        candidate = ""
+        seen_calls: set[str] = set()
+
+        # 1) tool-selection turns: thinking off (simple decisions, ~3 s each)
+        if tools:
+            for _turn in range(max_turns):
+                msg, _ = await self._chat(agent, model, messages, think=False, tools=tools)
+                content, reasoning = split_reasoning(msg)
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                calls = msg.get("tool_calls") or []
+                if not calls:
+                    candidate = content
+                    break
+                messages.append({"role": "assistant", "content": content or "", "tool_calls": calls})
+                parsed = []
+                for c in calls:
+                    fn = c.get("function") or {}
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    parsed.append((c, fn.get("name", ""), args if isinstance(args, dict) else {}))
+                keys = [n + json.dumps(a, sort_keys=True, default=str) for _, n, a in parsed]
+                if all(k in seen_calls for k in keys):
+                    # small local models tend to repeat the same calls until the turn limit; the results are
+                    # already in context, so go straight to the final answer
+                    messages.pop()
+                    log.info("local agent %s: repeated tool calls, ending the tool phase", agent)
+                    break
+                seen_calls.update(keys)
+                results = await asyncio.gather(*(GeminiBackend._exec(executor, n, a, allowed) for _, n, a in parsed))
+                for (c, name, _a), (data, tc) in zip(parsed, results):
+                    trace.append(tc)
+                    messages.append({"role": "tool", "tool_call_id": c.get("id") or name, "name": name,
+                                     "content": json.dumps(data, default=str, separators=(",", ":"))})
+
+        # 2) final turn: JSON only (lesson 6), thinking per preset. Quick mode may reuse a valid direct answer.
+        think = self.thinks(agent, final=True)
+        output, error = None, None
+        if candidate and not think:
+            try:
+                output = parse_output(candidate, strict)
+            except (ValueError, ValidationError):
+                output = None
+        if output is None:
+            if tools:
+                messages.append({"role": "user", "content": FINAL_JSON_PROMPT})
+            last_err: Exception | None = None
+            for attempt in range(1 + config.LOCAL_VALIDATION_RETRIES):
+                msg, finish = await self._chat(agent, model, messages, think=think, schema=strict)
+                text, reasoning = split_reasoning(msg)
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                if not text and finish == "length":
+                    last_err = ValueError("answer truncated (max_tokens reached while thinking)")
+                else:
+                    try:
+                        output = parse_output(text, strict)
+                        break
+                    except (ValueError, ValidationError) as e:
+                        last_err = e
+                problems = validation_problems(last_err)
+                log.warning("local agent %s: invalid output (attempt %d): %s", agent, attempt + 1, "; ".join(problems)[:300])
+                messages.append({"role": "assistant", "content": text or "(empty)"})
+                messages.append({"role": "user", "content": feedback_prompt(text or "(empty)", problems)})
+            if output is None:
+                error = (f"invalid output after {1 + config.LOCAL_VALIDATION_RETRIES} attempts: "
+                         + "; ".join(validation_problems(last_err)))[:400]
+        return AgentResult(output=output, text=candidate, trace=trace, cost_usd=0.0, error=error,
+                           searched=any(t.tool == "web_search" for t in trace),
+                           reasoning="\n\n".join(reasoning_parts))
+
+    async def probe(self, model: str, feature: str) -> tuple[bool, bool]:
+        return False, True  # no Google Search grounding (lesson 9): the web_search MCP tool is used instead

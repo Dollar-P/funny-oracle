@@ -123,6 +123,20 @@ API (all under `/api`): `models`, `tickers/search`, `quote/{t}`, `history/{t}`, 
 `POST predictions/{id}/replay`, `POST duels`, `duels/{id}`, `scoreboard`, `budget`, `autoscalp/start|stop|status`.
 Up to 2 shows run at once (a duel uses both). A third gets HTTP 429, and a budget refusal returns HTTP 402.
 
+### Local models (LM Studio, free)
+
+Any OpenAI-compatible local server works as a free, slow provider (see `LOCAL_LLM.md`). Set
+`LOCAL_BASE_URL=http://<your LM Studio host>:1234/v1` in your local `.env` (and optionally `LOCAL_MODEL`), keep
+Thinking ON in LM Studio, and the server's chat models appear in the Arena and Duel pickers as **free · local**.
+
+- **Quick** (thinking off everywhere): a swing show took ~6–7 min with `prism-ml/bonsai-27b` on a 6 GB RTX 4050.
+  **Deep** turns thinking on for each analyst's final report, the debate and the verdict (~20–30 min, estimate).
+- No Google Search: the News Researcher uses the `web_search` / `fetch_url` MCP tools and shares one brief.
+- Swing only — Scalp refuses local models (the horizon would be over before the show ends).
+- Costs ฿0, so it still works when the budget is used up.
+
+![](docs/local_llm/duel_local_vs_flash_lite_real.png)
+
 ### Budget guard
 
 `BUDGET_THB` (default ฿100) is a hard cap. Before each prediction the guard compares *spent + estimate*

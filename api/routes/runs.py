@@ -30,6 +30,7 @@ class PredictionRequest(BaseModel):
     horizon: str = "1M"
     analyst_model: str | None = None
     judge_model: str | None = None
+    think_preset: str | None = None  # local models: quick | deep
     mock: bool | None = None
 
 
@@ -39,6 +40,7 @@ class DuelRequest(BaseModel):
     horizon: str = "1M"
     model_a: str
     model_b: str
+    think_preset: str | None = None  # applies to whichever side is a local model
     mock: bool | None = None
 
 
@@ -66,11 +68,25 @@ def _models(mode: str, analyst: str | None, judge: str | None) -> dict[str, str]
     for role, mid in m.items():
         if mid and config.provider_for(mid) != config.provider_for(m["analyst"]):
             raise HTTPException(422, "analyst and judge must use the same provider")
+    if mode not in ("swing",) and config.provider_for(m["analyst"]) not in config.SCALP_PROVIDERS:
+        raise HTTPException(422, orchestrator.SCALP_LOCAL_REFUSAL)
     return m
+
+
+def _preset(p: str | None) -> str | None:
+    if p is None:
+        return None
+    p = p.lower()
+    if p not in config.THINK_PRESETS:
+        raise HTTPException(422, f"think_preset must be one of {list(config.THINK_PRESETS)}")
+    return p
 
 
 def _budget_refusal(mode: str, models: list[str]) -> JSONResponse | None:
     g = BudgetGuard()
+    models = [m for m in models if not cost.is_free(m)]  # local models cost nothing, even with the budget spent
+    if not models:
+        return None
     spent = cost.spent_usd()
     est = sum(g.estimate_usd(mode, m) for m in models)
     if spent + est > g.budget_usd:
@@ -138,7 +154,8 @@ async def create_prediction(req: PredictionRequest, mock: int | None = Query(Non
         if refusal:
             return refusal
         run = MANAGER.start_real({"ticker": req.ticker, "mode": req.mode, "horizon": req.horizon,
-                                  "analyst_model": models["analyst"], "judge_model": models["judge"]})
+                                  "analyst_model": models["analyst"], "judge_model": models["judge"],
+                                  "think_preset": _preset(req.think_preset)})
     return {"run_id": run.run_id, "mock": is_mock}
 
 
@@ -268,6 +285,7 @@ async def create_duel(req: DuelRequest, mock: int | None = Query(None)):
         if refusal:
             return refusal
         common = {"ticker": req.ticker, "mode": req.mode, "horizon": req.horizon}
+        common["think_preset"] = _preset(req.think_preset)
         a = MANAGER.start_real({**common, "analyst_model": ma["analyst"], "judge_model": ma["judge"]}, duel_id)
         b = MANAGER.start_real({**common, "analyst_model": mb["analyst"], "judge_model": mb["judge"]}, duel_id)
     MANAGER.duels[duel_id] = {"run_ids": [a.run_id, b.run_id], "models": [ma, mb], "mock": is_mock,

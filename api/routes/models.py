@@ -12,6 +12,9 @@ from core.db import connect
 
 router = APIRouter()
 
+SCALP_REASON = ("Local models are too slow for Scalp mode (a 15-minute horizon would be over before the show "
+                "ends). Use Swing, or pick a Gemini model for Scalp.")
+
 LABELS = {
     "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
     "gemini-3.6-flash": "Gemini 3.6 Flash",
@@ -91,6 +94,60 @@ def configured_providers() -> set[str]:
     return p
 
 
+_LOCAL_CACHE: dict = {"at": 0.0, "ids": None, "error": None}
+LOCAL_CACHE_S = 60
+
+
+def local_server_models() -> tuple[list[str] | None, str | None]:
+    """Chat models the LM Studio server at LOCAL_BASE_URL reports (cached 60 s). (ids, error)."""
+    import time
+
+    import httpx
+
+    if time.time() - _LOCAL_CACHE["at"] < LOCAL_CACHE_S:
+        return _LOCAL_CACHE["ids"], _LOCAL_CACHE["error"]
+    ids, err = None, None
+    try:
+        r = httpx.get(f"{config.LOCAL_BASE_URL}/models", timeout=3.0)
+        r.raise_for_status()
+        ids = [m["id"] for m in r.json().get("data", []) if "embed" not in m.get("id", "").lower()]
+    except Exception as e:
+        err = f"LM Studio not reachable at LOCAL_BASE_URL ({type(e).__name__})"
+    _LOCAL_CACHE.update(at=time.time(), ids=ids, error=err)
+    return ids, err
+
+
+def local_models(lat: dict) -> list[dict]:
+    """Local models for the pickers: free, slow, no Scalp (LOCAL_LLM.md "Where local fits")."""
+    import os
+
+    ids, err = local_server_models()
+    if ids is None:
+        # only advertise an unreachable server when the user configured one
+        if not (os.getenv("LOCAL_BASE_URL") or config.LLM_PROVIDER == "local"):
+            return []
+        ids, available = [config.LOCAL_MODEL], False
+    else:
+        available = True
+    ordered = sorted(ids, key=lambda m: (m != config.LOCAL_MODEL, m))
+    out = []
+    for mid in ordered:
+        full = config.LOCAL_PREFIX + mid
+        obs = lat.get(full, {})
+        out.append({
+            "id": full, "provider": "local", "label": f"{mid.split('/')[-1]} (local)",
+            "price_in": 0.0, "price_out": 0.0, "price_search": 0.0,
+            "speed_tier": 1, "avg_elapsed_s": obs,
+            "supports_search": False,  # uses the web_search / fetch_url MCP tools instead of grounding
+            "est_cost_thb": {m: 0.0 for m in config.HORIZONS},
+            "is_default": config.LLM_PROVIDER == "local" and mid == config.LOCAL_MODEL,
+            "scalp_ok": False, "scalp_reason": SCALP_REASON,
+            "available": available, "unavailable_reason": None if available else err,
+            "think_presets": list(config.THINK_PRESETS), "default_think_preset": config.LOCAL_THINK_PRESET,
+        })
+    return out
+
+
 def list_models() -> list[dict]:
     providers = configured_providers()
     lat = observed_latency()
@@ -99,7 +156,7 @@ def list_models() -> list[dict]:
     out = []
     for mid in config.PRICES:
         prov = config.provider_for(mid)
-        if prov not in providers:
+        if prov not in providers or prov == "local":
             continue
         price = cost.price_for(mid)
         out.append({
@@ -110,9 +167,10 @@ def list_models() -> list[dict]:
             "supports_search": _supports_search(prov, mid),
             "est_cost_thb": {m: round(cost.usd_to_thb(guard.estimate_usd(m, mid)), 2) for m in config.HORIZONS},
             "is_default": mid == default,
+            "scalp_ok": True, "available": True,
         })
     out.sort(key=lambda m: (m["provider"] != config.LLM_PROVIDER, m["price_in"] + m["price_out"]))
-    return out
+    return out + local_models(lat)
 
 
 @router.get("/models")

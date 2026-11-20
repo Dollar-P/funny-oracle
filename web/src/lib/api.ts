@@ -9,6 +9,7 @@ import type {
   PredictionRow,
   Quote,
   Scoreboard,
+  ThinkPreset,
   TickerHit,
 } from "./types";
 
@@ -52,6 +53,7 @@ export interface StartRun {
   horizon: string;
   analyst_model?: string | null;
   judge_model?: string | null;
+  think_preset?: ThinkPreset | null;
   mock?: boolean;
 }
 
@@ -83,7 +85,7 @@ export const api = {
       `/predictions/${id}${evaluate ? "?evaluate=1" : ""}`,
     ),
   run: (id: string) => req<{ run_id: string; done: boolean; prediction_id: number | null; error: string | null }>(`/runs/${id}`),
-  startDuel: (b: { ticker: string; mode: Mode; horizon: string; model_a: string; model_b: string; mock?: boolean }) =>
+  startDuel: (b: { ticker: string; mode: Mode; horizon: string; model_a: string; model_b: string; think_preset?: ThinkPreset | null; mock?: boolean }) =>
     post<{ duel_id: string; run_ids: [string, string]; mock: boolean }>("/duels", b),
   duel: (id: string) => req<DuelInfo>(`/duels/${id}`),
   scoreboard: (evaluate = true) => req<Scoreboard>(`/scoreboard?evaluate=${evaluate}`),

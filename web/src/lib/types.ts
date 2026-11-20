@@ -152,7 +152,7 @@ export type EventOf<T extends RunEvent["type"]> = Extract<RunEvent, { type: T }>
 
 export interface ModelInfo {
   id: string;
-  provider: "gemini" | "claude";
+  provider: "gemini" | "claude" | "local";
   label: string;
   price_in: number;
   price_out: number;
@@ -162,7 +162,15 @@ export interface ModelInfo {
   supports_search: boolean | null;
   est_cost_thb: Record<Mode, number>;
   is_default: boolean;
+  scalp_ok: boolean;
+  scalp_reason?: string;
+  available: boolean;
+  unavailable_reason?: string | null;
+  think_presets?: ThinkPreset[];
+  default_think_preset?: ThinkPreset;
 }
+
+export type ThinkPreset = "quick" | "deep";
 
 export interface TickerHit {
   symbol: string;
